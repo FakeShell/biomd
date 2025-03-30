@@ -24,6 +24,20 @@ typedef struct {
 
 static BiomFingerprint *fingerprint_state = NULL;
 
+static gboolean
+is_valid_finger_name(const gchar *finger_name)
+{
+    if (!finger_name)
+        return FALSE;
+
+    for (gint i = 0; valid_finger_names[i] != NULL; i++) {
+        if (g_strcmp0(finger_name, valid_finger_names[i]) == 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 void
 emit_signal_state_changed(GDBusConnection *connection, BiometricState state)
 {
@@ -400,6 +414,15 @@ handle_fingerprint_method_call(GDBusConnection *connection,
     if (g_strcmp0(method_name, "Enroll") == 0) {
         const gchar *finger_name = NULL;
         g_variant_get(parameters, "(&s)", &finger_name);
+
+        if (!is_valid_finger_name(finger_name)) {
+            g_dbus_method_invocation_return_error(invocation,
+                                                  G_DBUS_ERROR,
+                                                  G_DBUS_ERROR_INVALID_ARGS,
+                                                  "Invalid finger name: %s", finger_name ? finger_name : "(null)");
+            return;
+        }
+
         gboolean success = FALSE;
 
         if (self->current_state == STATE_IDLE) {
@@ -422,8 +445,6 @@ handle_fingerprint_method_call(GDBusConnection *connection,
 
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", success));
     } else if (g_strcmp0(method_name, "Identify") == 0) {
-        const gchar *finger_name = NULL;
-        g_variant_get(parameters, "(&s)", &finger_name);
         gboolean success = FALSE;
 
         if (self->current_state == STATE_IDLE) {
@@ -476,6 +497,15 @@ handle_fingerprint_method_call(GDBusConnection *connection,
     } else if (g_strcmp0(method_name, "RemoveFinger") == 0) {
         const gchar *finger_name = NULL;
         g_variant_get(parameters, "(&s)", &finger_name);
+
+        if (!is_valid_finger_name(finger_name)) {
+            g_dbus_method_invocation_return_error(invocation,
+                                                  G_DBUS_ERROR,
+                                                  G_DBUS_ERROR_INVALID_ARGS,
+                                                  "Invalid finger name: %s", finger_name ? finger_name : "(null)");
+            return;
+        }
+
         gboolean success = FALSE;
 
         if (g_str_has_prefix(finger_name, "finger_")) {
@@ -511,6 +541,23 @@ handle_fingerprint_method_call(GDBusConnection *connection,
         const gchar *old_name = NULL;
         const gchar *new_name = NULL;
         g_variant_get(parameters, "(&s&s)", &old_name, &new_name);
+
+        if (!is_valid_finger_name(old_name)) {
+            g_dbus_method_invocation_return_error(invocation,
+                                                  G_DBUS_ERROR,
+                                                  G_DBUS_ERROR_INVALID_ARGS,
+                                                  "Invalid original finger name: %s", old_name ? old_name : "(null)");
+            return;
+        }
+
+        if (!is_valid_finger_name(new_name)) {
+            g_dbus_method_invocation_return_error(invocation,
+                                                  G_DBUS_ERROR,
+                                                  G_DBUS_ERROR_INVALID_ARGS,
+                                                  "Invalid new finger name: %s", new_name ? new_name : "(null)");
+            return;
+        }
+
         gboolean success = FALSE;
 
         if (old_name && new_name && database_is_valid_finger_name(new_name)) {
@@ -567,6 +614,15 @@ handle_fingerprint_get_property(GDBusConnection *connection,
         return g_variant_new_int32(self->acquisition_info);
     } else if (g_strcmp0(property_name, "HardwareAvailable") == 0) {
         return g_variant_new_boolean(self->backend_available);
+    } else if (g_strcmp0(property_name, "ValidFingerNames") == 0) {
+        GVariantBuilder builder;
+        g_variant_builder_init(&builder, G_VARIANT_TYPE("as"));
+
+        for (gint i = 0; valid_finger_names[i] != NULL; i++) {
+            g_variant_builder_add(&builder, "s", valid_finger_names[i]);
+        }
+
+        return g_variant_builder_end(&builder);
     } else {
         g_set_error(error,
                     G_DBUS_ERROR,
