@@ -20,6 +20,7 @@ typedef struct {
     FingerprintBackend *backend;
     gboolean backend_available;
     GDBusConnection *connection;
+    gchar *enrollment_finger_name;
 } BiomFingerprint;
 
 static BiomFingerprint *fingerprint_state = NULL;
@@ -250,16 +251,30 @@ backend_enroll_result_cb(gpointer user_data, guint32 finger_id, guint32 group_id
     emit_signal_enrollment_progress_changed(connection, progress);
 
     if (remaining == 0) {
-        gchar *suggested_name = database_get_suggested_finger_name();
         gchar *finger_name;
-        if (suggested_name != NULL)
-            finger_name = suggested_name;
-        else
-            finger_name = g_strdup_printf("finger_%u", finger_id);
+
+        if (state->enrollment_finger_name && state->enrollment_finger_name[0] != '\0') {
+            finger_name = g_strdup(state->enrollment_finger_name);
+            g_debug("Using requested finger name: %s", finger_name);
+        } else {
+            gchar *suggested_name = database_get_suggested_finger_name();
+            if (suggested_name != NULL) {
+                finger_name = suggested_name;
+                g_debug("Using suggested finger name: %s", finger_name);
+            } else {
+                finger_name = g_strdup_printf("finger_%u", finger_id);
+                g_debug("Using auto-generated finger name: %s", finger_name);
+            }
+        }
 
         database_add_fingerprint(finger_id, finger_name);
         update_enrolled_fingers_from_database();
         emit_signal_enrolled_fingers_changed(connection, state->enrolled_fingers);
+
+        if (state->enrollment_finger_name) {
+            g_free(state->enrollment_finger_name);
+            state->enrollment_finger_name = NULL;
+        }
 
         state->current_state = STATE_IDLE;
         emit_signal_state_changed(connection, state->current_state);
@@ -428,10 +443,15 @@ handle_fingerprint_method_call(GDBusConnection *connection,
         if (self->current_state == STATE_IDLE) {
             self->current_state = STATE_ENROLLING;
             self->enrollment_progress = 0;
+
+            if (self->enrollment_finger_name)
+                g_free(self->enrollment_finger_name);
+            self->enrollment_finger_name = g_strdup(finger_name);
+
             emit_signal_state_changed(connection, self->current_state);
 
             if (self->backend_available && self->backend) {
-                g_debug("Starting fingerprint enrollment");
+                g_debug("Starting fingerprint enrollment for finger %s", finger_name);
                 success = fingerprint_backend_perform_enrollment(self->backend, "default_password", 60);
             } else {
                 g_debug("Backend not available for enrollment");
@@ -439,6 +459,8 @@ handle_fingerprint_method_call(GDBusConnection *connection,
 
             if (!success) {
                 self->current_state = STATE_IDLE;
+                g_free(self->enrollment_finger_name);
+                self->enrollment_finger_name = NULL;
                 emit_signal_state_changed(connection, self->current_state);
             }
         }
@@ -471,6 +493,12 @@ handle_fingerprint_method_call(GDBusConnection *connection,
         if (self->current_state == STATE_ENROLLING) {
             self->current_state = STATE_IDLE;
             self->enrollment_progress = 0;
+
+            if (self->enrollment_finger_name) {
+                g_free(self->enrollment_finger_name);
+                self->enrollment_finger_name = NULL;
+            }
+
             emit_signal_state_changed(connection, self->current_state);
 
             if (self->backend_available && self->backend) {
@@ -864,6 +892,7 @@ fingerprint_init(GDBusConnection *connection)
     fingerprint_state->backend_available = FALSE;
     fingerprint_state->backend = NULL;
     fingerprint_state->connection = connection;
+    fingerprint_state->enrollment_finger_name = NULL;
 
     fingerprint_introspection_data = g_dbus_node_info_new_for_xml(fingerprint_introspection_xml, &error);
     if (error != NULL) {
@@ -920,6 +949,11 @@ fingerprint_cleanup(GDBusConnection *connection)
 
             g_array_free(fingerprint_state->enrolled_fingers, TRUE);
             fingerprint_state->enrolled_fingers = NULL;
+        }
+
+        if (fingerprint_state->enrollment_finger_name) {
+            g_free(fingerprint_state->enrollment_finger_name);
+            fingerprint_state->enrollment_finger_name = NULL;
         }
 
         g_free(fingerprint_state);
