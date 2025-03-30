@@ -426,6 +426,29 @@ handle_fingerprint_method_call(GDBusConnection *connection,
 {
     BiomFingerprint *self = (BiomFingerprint *)user_data;
 
+    if (self->current_state != STATE_IDLE &&
+        !(g_strcmp0(method_name, "StopEnroll") == 0 || g_strcmp0(method_name, "StopIdentify") == 0)) {
+
+        const gchar *state_name;
+        switch (self->current_state) {
+            case STATE_ENROLLING:
+                state_name = "enrollment";
+                break;
+            case STATE_IDENTIFYING:
+                state_name = "identification";
+                break;
+            default:
+                state_name = "another operation";
+                break;
+        }
+
+        g_dbus_method_invocation_return_error(invocation,
+                                              G_DBUS_ERROR,
+                                              G_DBUS_ERROR_FAILED,
+                                              "Cannot perform this operation while %s is in progress", state_name);
+        return;
+    }
+
     if (g_strcmp0(method_name, "Enroll") == 0) {
         const gchar *finger_name = NULL;
         g_variant_get(parameters, "(&s)", &finger_name);
