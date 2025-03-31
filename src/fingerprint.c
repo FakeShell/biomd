@@ -21,6 +21,7 @@ typedef struct {
     gboolean backend_available;
     GDBusConnection *connection;
     gchar *enrollment_finger_name;
+    guint32 enroll_remaining_steps;
 } BiomFingerprint;
 
 static BiomFingerprint *fingerprint_state = NULL;
@@ -241,16 +242,29 @@ backend_enroll_result_cb(gpointer user_data, guint32 finger_id, guint32 group_id
         return;
     }
 
-    gint progress = 100 - (remaining * 100 / 20);
-    if (progress < 0)
-        progress = 0;
-    if (progress > 100)
-        progress = 100;
+    if (remaining > 0) {
+        if (state->enroll_remaining_steps == 0) {
+            state->enroll_remaining_steps = remaining + 1;
+            g_debug("Enrollment started with %u total steps", state->enroll_remaining_steps);
+        }
 
-    state->enrollment_progress = progress;
-    emit_signal_enrollment_progress_changed(connection, progress);
+        float progress_fraction = 1.0 - ((float)remaining / state->enroll_remaining_steps);
+        gint progress = (gint)(progress_fraction * 100);
 
-    if (remaining == 0) {
+        if (progress < 0)
+            progress = 0;
+        if (progress > 100)
+            progress = 100;
+
+        g_debug("Enrollment progress: %d%% (remaining: %u of %u steps)",
+                progress, remaining, state->enroll_remaining_steps);
+
+        state->enrollment_progress = progress;
+        emit_signal_enrollment_progress_changed(connection, progress);
+    } else {
+        state->enrollment_progress = 100;
+        emit_signal_enrollment_progress_changed(connection, 100);
+
         gchar *finger_name;
 
         if (state->enrollment_finger_name && state->enrollment_finger_name[0] != '\0') {
@@ -275,6 +289,8 @@ backend_enroll_result_cb(gpointer user_data, guint32 finger_id, guint32 group_id
             g_free(state->enrollment_finger_name);
             state->enrollment_finger_name = NULL;
         }
+
+        state->enroll_remaining_steps = 0;
 
         state->current_state = STATE_IDLE;
         emit_signal_state_changed(connection, state->current_state);
@@ -466,6 +482,7 @@ handle_fingerprint_method_call(GDBusConnection *connection,
         if (self->current_state == STATE_IDLE) {
             self->current_state = STATE_ENROLLING;
             self->enrollment_progress = 0;
+            self->enroll_remaining_steps = 0;
 
             if (self->enrollment_finger_name)
                 g_free(self->enrollment_finger_name);
@@ -516,6 +533,7 @@ handle_fingerprint_method_call(GDBusConnection *connection,
         if (self->current_state == STATE_ENROLLING) {
             self->current_state = STATE_IDLE;
             self->enrollment_progress = 0;
+            self->enroll_remaining_steps = 0;
 
             if (self->enrollment_finger_name) {
                 g_free(self->enrollment_finger_name);
@@ -916,6 +934,7 @@ fingerprint_init(GDBusConnection *connection)
     fingerprint_state->backend = NULL;
     fingerprint_state->connection = connection;
     fingerprint_state->enrollment_finger_name = NULL;
+    fingerprint_state->enroll_remaining_steps = 0;
 
     fingerprint_introspection_data = g_dbus_node_info_new_for_xml(fingerprint_introspection_xml, &error);
     if (error != NULL) {
