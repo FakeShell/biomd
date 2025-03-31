@@ -20,3 +20,9 @@ Depends: ${misc:Depends},
          python3-dbus,
 Description: Biometric service provider
  Biomd provides biometric services such as Fingerprint
+
+Package: biomd-dev
+Architecture: any
+Depends: ${misc:Depends},
+Description: Biometric service provider
+ Biomd provides biometric services such as Fingerprint - development package
