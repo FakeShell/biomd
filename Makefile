@@ -11,6 +11,7 @@ SOURCES = src/biomd.c \
           src/fpd_compat.c
 TARGET = biomd
 TARGET_CLIENT = client/biomdctl.py
+HEADERS = include/biomd_enums.h
 PREFIX ?= /usr
 
 all: $(TARGET)
@@ -28,6 +29,8 @@ install:
 	install -m 0644 data/io.FuriOS.Biomd.conf $(DESTDIR)$(PREFIX)/share/dbus-1/system.d/
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m 0755 $(TARGET_CLIENT) $(DESTDIR)$(PREFIX)/bin/biomdctl
+	install -d $(DESTDIR)$(PREFIX)/include/biomd
+	install -m 0644 $(HEADERS) $(DESTDIR)$(PREFIX)/include/biomd/
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/sbin/$(TARGET)
