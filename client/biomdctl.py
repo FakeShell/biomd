@@ -47,7 +47,7 @@ class FingerprintAPI(BiometricAPI):
         super().__init__(
             bus,
             'io.FuriOS.Biomd',
-            '/org/FuriOS/Biomd/Fingerprint',
+            '/io/FuriOS/Biomd/Fingerprint',
             'io.FuriOS.Biomd.Fingerprint'
         )
 
@@ -210,7 +210,7 @@ class ManagerAPI(BiometricAPI):
         super().__init__(
             bus,
             'io.FuriOS.Biomd',
-            '/org/FuriOS/Biomd',
+            '/io/FuriOS/Biomd',
             'io.FuriOS.Biomd'
         )
 
