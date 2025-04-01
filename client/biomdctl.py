@@ -68,7 +68,8 @@ class FingerprintAPI(BiometricAPI):
             5: "CANCELED",
             6: "REMOVE",
             7: "LOCKOUT",
-            8: "GENERAL"
+            8: "GENERAL",
+            9: "FINGER_NOT_RECOGNIZED"
         }
 
         self.acquisitions = {
