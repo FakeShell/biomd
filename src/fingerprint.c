@@ -65,7 +65,7 @@ emit_signal_state_changed(GDBusConnection *connection, BiometricState state)
 
     g_dbus_connection_emit_signal(connection,
                                   NULL,
-                                  "/org/FuriOS/Biomd/Fingerprint",
+                                  "/io/FuriOS/Biomd/Fingerprint",
                                   "io.FuriOS.Biomd.Fingerprint",
                                   "StateChanged",
                                   g_variant_new("(i)", state),
@@ -82,7 +82,7 @@ emit_signal_enrollment_progress_changed(GDBusConnection *connection, gint progre
 
     g_dbus_connection_emit_signal(connection,
                                   NULL,
-                                  "/org/FuriOS/Biomd/Fingerprint",
+                                  "/io/FuriOS/Biomd/Fingerprint",
                                   "io.FuriOS.Biomd.Fingerprint",
                                   "EnrollmentProgressChanged",
                                   g_variant_new("(i)", progress),
@@ -112,7 +112,7 @@ emit_signal_enrolled_fingers_changed(GDBusConnection *connection, GArray *finger
     GVariant *variant = g_variant_new("(^as)", strings);
     g_dbus_connection_emit_signal(connection,
                                   NULL,
-                                  "/org/FuriOS/Biomd/Fingerprint",
+                                  "/io/FuriOS/Biomd/Fingerprint",
                                   "io.FuriOS.Biomd.Fingerprint",
                                   "EnrolledFingersChanged",
                                   variant,
@@ -130,7 +130,7 @@ emit_signal_error_info_changed(GDBusConnection *connection, BiometricError error
 
     g_dbus_connection_emit_signal(connection,
                                   NULL,
-                                  "/org/FuriOS/Biomd/Fingerprint",
+                                  "/io/FuriOS/Biomd/Fingerprint",
                                   "io.FuriOS.Biomd.Fingerprint",
                                   "ErrorInfoChanged",
                                   g_variant_new("(i)", error),
@@ -147,7 +147,7 @@ emit_signal_acquisition_info_changed(GDBusConnection *connection, BiometricAcqui
 
     g_dbus_connection_emit_signal(connection,
                                   NULL,
-                                  "/org/FuriOS/Biomd/Fingerprint",
+                                  "/io/FuriOS/Biomd/Fingerprint",
                                   "io.FuriOS.Biomd.Fingerprint",
                                   "AcquisitionInfoChanged",
                                   g_variant_new("(i)", info),
@@ -169,7 +169,7 @@ emit_signal_identified(GDBusConnection *connection, const gchar *finger_name)
 
     g_dbus_connection_emit_signal(connection,
                                   NULL,
-                                  "/org/FuriOS/Biomd/Fingerprint",
+                                  "/io/FuriOS/Biomd/Fingerprint",
                                   "io.FuriOS.Biomd.Fingerprint",
                                   "Identified",
                                   g_variant_new("(s)", finger_name),
@@ -770,7 +770,7 @@ fingerprint_register(GDBusConnection *connection, GError **error)
 
     return g_dbus_connection_register_object(
         connection,
-        "/org/FuriOS/Biomd/Fingerprint",
+        "/io/FuriOS/Biomd/Fingerprint",
         fingerprint_introspection_data->interfaces[0],
         &fingerprint_interface_vtable,
         fingerprint_state,
