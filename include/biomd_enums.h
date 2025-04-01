@@ -27,7 +27,8 @@ typedef enum {
     ERROR_CANCELED = 5,             /**< Operation was canceled */
     ERROR_REMOVE = 6,               /**< Error removing fingerprint */
     ERROR_LOCKOUT = 7,              /**< Too many failed attempts, device locked */
-    ERROR_GENERAL = 8               /**< Generic error */
+    ERROR_GENERAL = 8,              /**< Generic error */
+    ERROR_FINGER_NOT_RECOGNIZED = 9 /**< Finger is not recognized */
 } BiometricError;
 
 /**

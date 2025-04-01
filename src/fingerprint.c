@@ -197,6 +197,8 @@ map_error_to_biometric_error(guint32 error)
         case 7: // FINGERPRINT_ERROR_LOCKOUT
             return ERROR_LOCKOUT;
         case 8: // FINGERPRINT_ERROR_VENDOR
+        case 9: // FINGERPRINT_ERROR_FINGER_NOT_RECOGNIZED
+            return ERROR_FINGER_NOT_RECOGNIZED;
         default:
             return ERROR_GENERAL;
     }
@@ -348,10 +350,13 @@ backend_authenticated_cb(gpointer user_data, guint32 finger_id, guint32 group_id
 
         emit_signal_identified(connection, finger_name);
         g_free(finger_name);
-    }
 
-    state->current_state = STATE_IDLE;
-    emit_signal_state_changed(connection, state->current_state);
+        state->current_state = STATE_IDLE;
+        emit_signal_state_changed(connection, state->current_state);
+    } else {
+        state->error_info = ERROR_FINGER_NOT_RECOGNIZED;
+        emit_signal_error_info_changed(connection, state->error_info);
+    }
 }
 
 static void
