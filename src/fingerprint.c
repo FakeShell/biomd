@@ -40,6 +40,21 @@ is_valid_finger_name(const gchar *finger_name)
     return FALSE;
 }
 
+static gboolean
+is_finger_already_enrolled(const gchar *finger_name)
+{
+    if (!finger_name || !fingerprint_state || !fingerprint_state->enrolled_fingers)
+        return FALSE;
+
+    for (guint i = 0; i < fingerprint_state->enrolled_fingers->len; i++) {
+        const gchar *enrolled_name = g_array_index(fingerprint_state->enrolled_fingers, gchar*, i);
+        if (g_strcmp0(enrolled_name, finger_name) == 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 void
 emit_signal_state_changed(GDBusConnection *connection, BiometricState state)
 {
@@ -478,6 +493,14 @@ handle_fingerprint_method_call(GDBusConnection *connection,
         }
 
         gboolean success = FALSE;
+
+        if (is_finger_already_enrolled(finger_name)) {
+            g_dbus_method_invocation_return_error(invocation,
+                                                  G_DBUS_ERROR,
+                                                  G_DBUS_ERROR_FAILED,
+                                                  "Finger '%s' is already enrolled", finger_name);
+            return;
+        }
 
         if (self->current_state == STATE_IDLE) {
             self->current_state = STATE_ENROLLING;
