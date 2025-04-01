@@ -324,6 +324,8 @@ backend_authenticated_cb(gpointer user_data, guint32 finger_id, guint32 group_id
         return;
     }
 
+    g_debug("Authenticated callback with finger id %d, group id %d", finger_id, group_id);
+
     if (finger_id != 0) {
         gchar *finger_name = database_get_finger_name(finger_id);
         if (finger_name == NULL) {
@@ -362,6 +364,8 @@ backend_acquired_cb(gpointer user_data, guint32 acquired_info, guint32 vendor_co
         return;
     }
 
+    g_debug("Acquired callback with code %d, vendor code %d", acquired_info, vendor_code);
+
     BiometricAcquisition acquisition = map_acquisition_to_biometric_acquisition(acquired_info);
     state->acquisition_info = acquisition;
     emit_signal_acquisition_info_changed(connection, acquisition);
@@ -376,6 +380,8 @@ backend_error_cb(gpointer user_data, guint32 error_code, guint32 vendor_code)
         g_warning("Invalid state in backend_error_cb");
         return;
     }
+
+    g_debug("Error callback with code %d, vendor code %d", error_code, vendor_code);
 
     BiometricError error = map_error_to_biometric_error(error_code);
     state->error_info = error;
@@ -397,6 +403,8 @@ backend_removed_cb(gpointer user_data, guint32 finger_id, guint32 group_id, guin
         return;
     }
 
+    g_debug("Removed callback with finger id %d, group id %d, remaining %d", finger_id, group_id, remaining);
+
     if (finger_id != 0) {
         database_remove_fingerprint(finger_id);
         update_enrolled_fingers_from_database();
@@ -413,6 +421,8 @@ backend_enumerate_cb(gpointer user_data, guint32 finger_id, guint32 group_id, gu
         g_warning("Invalid state in backend_enumerate_cb");
         return;
     }
+
+    g_debug("Enumerated callback with finger id %d, group id %d, remaining %d", finger_id, group_id, remaining);
 
     if (finger_id != 0) {
         gchar *existing_name = database_get_finger_name(finger_id);
