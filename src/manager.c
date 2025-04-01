@@ -128,7 +128,7 @@ manager_register(GDBusConnection *connection, GError **error)
 
     return g_dbus_connection_register_object(
         connection,
-        "/org/FuriOS/Biomd",
+        "/io/FuriOS/Biomd",
         manager_state->biomd_introspection_data->interfaces[0],
         &biomd_interface_vtable,
         NULL,
