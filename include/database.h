@@ -8,6 +8,7 @@
 
 #include <glib.h>
 #include <sqlite3.h>
+#include <time.h>
 
 #define DB_DIR "/var/lib/biomd"
 #define DB_PATH "/var/lib/biomd/fingerprints.db"
@@ -71,6 +72,14 @@ database_get_finger_name(guint32 finger_id);
  */
 guint32
 database_get_finger_id(const gchar *finger_name);
+
+/**
+ * Get the enrollment timestamp for a fingerprint
+ * @param finger_id The numeric fingerprint ID
+ * @return The timestamp or 0 if not found
+ */
+time_t
+database_get_finger_enrolled_time(guint32 finger_id);
 
 /**
  * Get all enrolled fingerprints
