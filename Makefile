@@ -1,6 +1,8 @@
 CC = gcc
 CFLAGS = `pkg-config --cflags gio-2.0 glib-2.0 libgbinder sqlite3` -Iinclude
 LDFLAGS = `pkg-config --libs gio-2.0 glib-2.0 libgbinder sqlite3`
+CFLAGS_SESSION = `pkg-config --cflags gio-2.0 glib-2.0` -Iinclude
+LDFLAGS_SESSION = `pkg-config --libs gio-2.0 glib-2.0` -lbatman-wrappers
 SOURCES = src/biomd.c \
           src/manager.c \
           src/fingerprint.c \
@@ -9,18 +11,23 @@ SOURCES = src/biomd.c \
           src/fingerprint_binder_hidl.c \
           src/database.c \
           src/fpd_compat.c
+SOURCES_SESSION = src/session/biomd_session.c
 TARGET = biomd
 TARGET_CLIENT = client/biomdctl.py
+TARGET_SESSION = biomd-session
 HEADERS = include/biomd_enums.h
 PREFIX ?= /usr
 
-all: $(TARGET)
+all: $(TARGET) $(TARGET_SESSION)
 
 $(TARGET):
 	$(CC) $(CFLAGS) $(SOURCES) -o $(TARGET) $(LDFLAGS)
 
+$(TARGET_SESSION):
+	$(CC) $(CFLAGS_SESSION) $(SOURCES_SESSION) -o $(TARGET_SESSION) $(LDFLAGS_SESSION)
+
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) $(TARGET_SESSION)
 
 install:
 	install -d $(DESTDIR)$(PREFIX)/sbin
@@ -31,9 +38,12 @@ install:
 	install -m 0755 $(TARGET_CLIENT) $(DESTDIR)$(PREFIX)/bin/biomdctl
 	install -d $(DESTDIR)$(PREFIX)/include/biomd
 	install -m 0644 $(HEADERS) $(DESTDIR)$(PREFIX)/include/biomd/
+	install -d $(DESTDIR)$(PREFIX)/libexec
+	install -m 0755 $(TARGET_SESSION) $(DESTDIR)$(PREFIX)/libexec/
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/sbin/$(TARGET)
 	rm -f $(DESTDIR)$(PREFIX)/share/dbus-1/system.d/io.FuriOS.Biomd.conf
+	rm -f $(DESTDIR)$(PREFIX)/libexec/$(TARGET_SESSION)
 
 .PHONY: all clean install uninstall
