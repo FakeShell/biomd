@@ -9,6 +9,7 @@ Build-Depends: debhelper-compat (= 13),
                dh-python,
                python3,
                batman-dev,
+               libpam0g-dev,
 Standards-Version: 4.7.0
 Vcs-Browser: https://github.com/furilabs/biomd
 Vcs-Git: https://github.com/furilabs/biomd.git
@@ -35,3 +36,10 @@ Depends: ${misc:Depends},
          ${shlibs:Depends},
 Description: Biometric service provider
  Biomd provides biometric services such as Fingerprint - Fprintd provider
+
+Package: libpam-biomd
+Architecture: any
+Depends: ${misc:Depends},
+         ${shlibs:Depends},
+Description: Biometric service provider
+ Biomd provides biometric services such as Fingerprint - PAM module
