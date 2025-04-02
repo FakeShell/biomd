@@ -116,6 +116,65 @@ is_valid_finger_name(const gchar *finger_name)
 }
 
 static gboolean
+check_caller_authorization(GDBusConnection *connection,
+                           const gchar *sender,
+                           GDBusMethodInvocation *invocation)
+{
+    g_autoptr(GError) error = NULL;
+    guint32 uid = G_MAXUINT32;
+    g_autoptr(GDBusProxy) bus_proxy;
+    g_autoptr(GVariant) result;
+
+    bus_proxy = g_dbus_proxy_new_sync(
+        connection,
+        G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES,
+        NULL,
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        NULL,
+        &error);
+
+    if (error != NULL) {
+        g_dbus_method_invocation_return_error(invocation,
+                                              G_DBUS_ERROR,
+                                              G_DBUS_ERROR_FAILED,
+                                              "Failed to create bus proxy: %s",
+                                              error->message);
+        return FALSE;
+    }
+
+    result = g_dbus_proxy_call_sync(
+        bus_proxy,
+        "GetConnectionUnixUser",
+        g_variant_new("(s)", sender),
+        G_DBUS_CALL_FLAGS_NONE,
+        -1,
+        NULL,
+        &error);
+
+    if (error != NULL) {
+        g_dbus_method_invocation_return_error(invocation,
+                                              G_DBUS_ERROR,
+                                              G_DBUS_ERROR_FAILED,
+                                              "Failed to get caller credentials: %s",
+                                              error->message);
+        return FALSE;
+    }
+
+    g_variant_get(result, "(u)", &uid);
+    if (uid != 0 && uid != 32011) {
+        g_dbus_method_invocation_return_error(invocation,
+                                              G_DBUS_ERROR,
+                                              G_DBUS_ERROR_ACCESS_DENIED,
+                                              "Access denied: only UIDs 0 and 32011 are allowed");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static gboolean
 get_property_boolean(GDBusProxy *proxy, const gchar *property_name, gboolean default_value)
 {
     g_autoptr(GError) error = NULL;
@@ -602,6 +661,9 @@ handle_method_call(GDBusConnection *connection,
                    gpointer user_data)
 {
     Fprintd *self = (Fprintd *)user_data;
+
+    if (!check_caller_authorization(connection, sender, invocation))
+        return;
 
     g_debug("Method call: %s.%s()", interface_name, method_name);
 
