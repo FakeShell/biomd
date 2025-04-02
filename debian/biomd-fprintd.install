@@ -1,1 +1,2 @@
 usr/libexec/biomd-fprintd
+usr/lib/systemd/system/fprintd.service.d/10-biomd.conf

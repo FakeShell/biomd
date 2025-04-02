@@ -2,3 +2,4 @@ usr/bin/biomdctl
 usr/sbin/biomd
 usr/libexec/biomd-session
 usr/share/dbus-1/system.d/io.FuriOS.Biomd.conf
+usr/lib/systemd/user/biomd-session.service

@@ -47,7 +47,12 @@ install:
 	install -m 0644 $(HEADERS) $(DESTDIR)$(PREFIX)/include/biomd/
 	install -d $(DESTDIR)$(PREFIX)/libexec
 	install -m 0755 $(TARGET_SESSION) $(DESTDIR)$(PREFIX)/libexec/
-	install -m 0755 $(TARGET_FPRINTD) $(DESTDIR)$(PREFIX)/libexec
+	install -m 0755 $(TARGET_FPRINTD) $(DESTDIR)$(PREFIX)/libexec/
+
+	install -d $(DESTDIR)$(PREFIX)/lib/systemd/system/fprintd.service.d
+	install -d $(DESTDIR)$(PREFIX)/lib/systemd/user
+	install -m 0644 data/10-biomd.conf $(DESTDIR)$(PREFIX)/lib/systemd/system/fprintd.service.d/
+	install -m 0644 data/biomd-session.service $(DESTDIR)$(PREFIX)/lib/systemd/user/
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/sbin/$(TARGET)
@@ -55,5 +60,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/share/dbus-1/system.d/io.FuriOS.Biomd.conf
 	rm -f $(DESTDIR)$(PREFIX)/libexec/$(TARGET_SESSION)
 	rm -f $(DESTDIR)$(PREFIX)/libexec/$(TARGET_FPRINTD)
+	rm -f $(DESTDIR)$(PREFIX)/lib/systemd/user/biomd-session.service
+	rm -f $(DESTDIR)$(PREFIX)/lib/systemd/system/fprintd.service.d/10-biomd.conf
 
 .PHONY: all clean install uninstall

@@ -1,0 +1,11 @@
+[Unit]
+Description=Biomd session listener
+After=sm.puri.Phosh.service
+PartOf=sm.puri.Phosh.service
+StartLimitBurst=5000
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+ExecStart=/usr/libexec/biomd-session

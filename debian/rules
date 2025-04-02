@@ -2,3 +2,6 @@
 
 %:
 	dh $@ --with=python3
+
+override_dh_installsystemd:
+	dh_installsystemd -pbiomd --name=biomd biomd.service --no-stop-on-upgrade
