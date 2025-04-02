@@ -26,3 +26,10 @@ Architecture: any
 Depends: ${misc:Depends},
 Description: Biometric service provider
  Biomd provides biometric services such as Fingerprint - development package
+
+Package: biomd-fprintd
+Architecture: any
+Depends: ${misc:Depends},
+         ${shlibs:Depends},
+Description: Biometric service provider
+ Biomd provides biometric services such as Fingerprint - Fprintd provider
