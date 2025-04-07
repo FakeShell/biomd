@@ -12,6 +12,7 @@ typedef struct {
     GDBusConnection *connection;
     GDBusProxy *login1_manager_proxy;
     GDBusProxy *session_proxy;
+    GDBusProxy *secrets_proxy;
     GDBusProxy *biomd_proxy;
 
     guint properties_changed_id;
@@ -26,17 +27,35 @@ static void
 setup_dbus_connection(BiometricSession *session);
 
 static gboolean
-get_dbus_boolean_property(GDBusProxy *proxy, const gchar *interface_name, const gchar *property_name)
+is_keyring_locked(BiometricSession *session)
 {
     g_autoptr(GError) error = NULL;
     g_autoptr(GVariant) result = NULL;
     g_autoptr(GVariant) value_variant = NULL;
-    gboolean value = FALSE;
+    gboolean is_locked = FALSE;
+
+    if (session->secrets_proxy == NULL) {
+        session->secrets_proxy = g_dbus_proxy_new_for_bus_sync(
+            G_BUS_TYPE_SESSION,
+            G_DBUS_PROXY_FLAGS_NONE,
+            NULL,
+            "org.freedesktop.secrets",
+            "/org/freedesktop/secrets/collection/login",
+            "org.freedesktop.DBus.Properties",
+            NULL,
+            &error
+        );
+
+        if (error) {
+            g_warning("Failed to create secrets proxy: %s", error->message);
+            return FALSE;
+        }
+    }
 
     result = g_dbus_proxy_call_sync(
-        proxy,
+        session->secrets_proxy,
         "org.freedesktop.DBus.Properties.Get",
-        g_variant_new("(ss)", interface_name, property_name),
+        g_variant_new("(ss)", "org.freedesktop.Secret.Collection", "Locked"),
         G_DBUS_CALL_FLAGS_NONE,
         -1,
         NULL,
@@ -44,43 +63,12 @@ get_dbus_boolean_property(GDBusProxy *proxy, const gchar *interface_name, const 
     );
 
     if (error) {
-        g_warning("Failed to get property %s: %s", property_name, error->message);
+        g_warning("Failed to get property Locked: %s", error->message);
         return FALSE;
     }
 
     g_variant_get(result, "(v)", &value_variant);
-    value = g_variant_get_boolean(value_variant);
-    return value;
-}
-
-static gboolean
-is_keyring_locked(BiometricSession *session)
-{
-    g_autoptr(GError) error = NULL;
-    g_autoptr(GDBusProxy) secrets_proxy = NULL;
-    gboolean is_locked = FALSE;
-
-    secrets_proxy = g_dbus_proxy_new_for_bus_sync(
-        G_BUS_TYPE_SESSION,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "org.freedesktop.secrets",
-        "/org/freedesktop/secrets/collection/login",
-        "org.freedesktop.DBus.Properties",
-        NULL,
-        &error
-    );
-
-    if (error) {
-        g_warning("Failed to create secrets proxy: %s", error->message);
-        return FALSE;
-    }
-
-    is_locked = get_dbus_boolean_property(
-        secrets_proxy,
-        "org.freedesktop.Secret.Collection",
-        "Locked"
-    );
+    is_locked = g_variant_get_boolean(value_variant);
 
     return is_locked;
 }
@@ -268,6 +256,8 @@ is_screen_locked(BiometricSession *session)
 {
     g_autofree gchar *session_path = NULL;
     g_autoptr(GError) error = NULL;
+    g_autoptr(GVariant) result = NULL;
+    g_autoptr(GVariant) value_variant = NULL;
     gboolean is_locked = FALSE;
 
     if (session->session_id == NULL)
@@ -296,11 +286,68 @@ is_screen_locked(BiometricSession *session)
         }
     }
 
-    is_locked = get_dbus_boolean_property(
+    result = g_dbus_proxy_call_sync(
         session->session_proxy,
-        "org.freedesktop.login1.Session",
-        "LockedHint"
+        "org.freedesktop.DBus.Properties.Get",
+        g_variant_new("(ss)", "org.freedesktop.login1.Session", "LockedHint"),
+        G_DBUS_CALL_FLAGS_NONE,
+        -1,
+        NULL,
+        &error
     );
+
+    if (error) {
+        g_warning("Failed to get property LockedHint: %s", error->message);
+
+        g_debug("Session is invalid when getting LockedHint, reloading session id");
+        g_clear_object(&session->session_proxy);
+        g_free(session->session_id);
+
+        session->session_id = get_session_id(session);
+
+        if (session->session_id != NULL) {
+            g_debug("New session id: %s", session->session_id);
+
+            session_path = g_strdup_printf("/org/freedesktop/login1/session/%s", session->session_id);
+            session->session_proxy = g_dbus_proxy_new_for_bus_sync(
+                G_BUS_TYPE_SYSTEM,
+                G_DBUS_PROXY_FLAGS_NONE,
+                NULL,
+                "org.freedesktop.login1",
+                session_path,
+                "org.freedesktop.DBus.Properties",
+                NULL,
+                &error
+            );
+
+            if (error) {
+                g_warning("Failed to create session proxy after refresh: %s", error->message);
+                return FALSE;
+            }
+
+            g_clear_error(&error);
+            result = g_dbus_proxy_call_sync(
+                session->session_proxy,
+                "org.freedesktop.DBus.Properties.Get",
+                g_variant_new("(ss)", "org.freedesktop.login1.Session", "LockedHint"),
+                G_DBUS_CALL_FLAGS_NONE,
+                -1,
+                NULL,
+                &error
+            );
+
+            if (error) {
+                g_warning("Failed to get property LockedHint after session refresh: %s", error->message);
+                return FALSE;
+            }
+        } else {
+            g_debug("New session id is NULL");
+            return FALSE;
+        }
+    }
+
+    g_variant_get(result, "(v)", &value_variant);
+    is_locked = g_variant_get_boolean(value_variant);
 
     return is_locked;
 }
@@ -715,6 +762,22 @@ setup_dbus_connection(BiometricSession *session)
         return;
     }
 
+    session->secrets_proxy = g_dbus_proxy_new_for_bus_sync(
+        G_BUS_TYPE_SESSION,
+        G_DBUS_PROXY_FLAGS_NONE,
+        NULL,
+        "org.freedesktop.secrets",
+        "/org/freedesktop/secrets/collection/login",
+        "org.freedesktop.DBus.Properties",
+        NULL,
+        &error
+    );
+
+    if (error) {
+        g_warning("Failed to create secrets proxy: %s", error->message);
+        error = NULL;
+    }
+
     if (session->connection == NULL) {
         session->connection = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &error);
         if (error) {
@@ -816,6 +879,8 @@ main(int argc, char *argv[])
         g_object_unref(session->login1_manager_proxy);
     if (session->session_proxy)
         g_object_unref(session->session_proxy);
+    if (session->secrets_proxy)
+        g_object_unref(session->secrets_proxy);
     if (session->biomd_proxy)
         g_object_unref(session->biomd_proxy);
 
