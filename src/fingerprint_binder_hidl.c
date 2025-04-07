@@ -57,16 +57,6 @@ enum GatekeeperFunctions {
     GK_DELETE_ALL_USERS = 4,
 };
 
-/* Run time type identification for the notify() call payload. */
-typedef enum {
-    FINGERPRINT_MSG_ERROR = -1,
-    FINGERPRINT_MSG_ACQUIRED = 1,
-    FINGERPRINT_MSG_TEMPLATE_ENROLLING = 3,
-    FINGERPRINT_MSG_TEMPLATE_REMOVED = 4,
-    FINGERPRINT_MSG_AUTHENTICATED = 5,
-    FINGERPRINT_MSG_TEMPLATE_ENUMERATING = 6,
-} FingerprintMsgType;
-
 typedef enum {
     FINGERPRINT_STATUS_UNKNOWN = 1,
     FINGERPRINT_STATUS_OK = 0,
@@ -658,7 +648,7 @@ fingerprint_hidl_client_callback(GBinderLocalObject* obj, GBinderRemoteRequest* 
             g_debug("%s %u acquired", iface, code);
             *status = fingerprint_hidl_callback_handle_acquired(self, &reader);
             break;
-case FP_CALLBACK_AUTHENTICATED:
+        case FP_CALLBACK_AUTHENTICATED:
             g_debug("%s %u authenticated", iface, code);
             *status = fingerprint_hidl_callback_handle_authenticated(self, &reader);
             break;
@@ -689,7 +679,7 @@ case FP_CALLBACK_AUTHENTICATED:
 }
 
 static gboolean
-fingerprint_hidl_gk_save_blob_to_file(const char* filename, const void* data, guint32 size, guint32 mode)
+fingerprint_hidl_gatekeeper_save_blob_to_file(const char* filename, const void* data, guint32 size, guint32 mode)
 {
     FILE* fp;
     gboolean success = FALSE;
@@ -727,7 +717,7 @@ fingerprint_hidl_gk_save_blob_to_file(const char* filename, const void* data, gu
 }
 
 static gboolean
-fingerprint_hidl_gk_load_handle_file(guint32 uid, void** handle, guint32* handle_size)
+fingerprint_hidl_gatekeeper_load_handle_file(guint32 uid, void** handle, guint32* handle_size)
 {
     FILE* fp;
     gboolean success = FALSE;
@@ -767,7 +757,7 @@ fingerprint_hidl_gk_load_handle_file(guint32 uid, void** handle, guint32* handle
 }
 
 char*
-fingerprint_hidl_gk_enroll(BiomFingerprintHidl* self, guint32 uid, const char* password)
+fingerprint_hidl_gatekeeper_enroll(BiomFingerprintHidl* self, guint32 uid, const char* password)
 {
     const gint gk_code = GK_ENROLL;
     GBinderLocalRequest* req;
@@ -807,7 +797,7 @@ fingerprint_hidl_gk_enroll(BiomFingerprintHidl* self, guint32 uid, const char* p
 
         gatekeeper_response = gbinder_reader_read_hidl_struct(&reader, GatekeeperResponse);
         if (gatekeeper_response) {
-            g_debug("Gatekeeper enroll timeout: %d, gk code: %d", gatekeeper_response->timeout, gatekeeper_response->code);
+            g_debug("Gatekeeper enroll timeout: %d, gatekeeper status code: %d", gatekeeper_response->timeout, gatekeeper_response->code);
 
             if (gatekeeper_response->data.count > 0 && gatekeeper_response->data.data.ptr) {
                 crypto_blob = g_memdup2(gatekeeper_response->data.data.ptr, gatekeeper_response->data.count);
@@ -816,7 +806,7 @@ fingerprint_hidl_gk_enroll(BiomFingerprintHidl* self, guint32 uid, const char* p
                 filename = g_strdup_printf("handle-%u.blob", uid);
 
                 if (crypto_blob && filename) {
-                    if (fingerprint_hidl_gk_save_blob_to_file(filename, crypto_blob, crypto_blob_size, 0600))
+                    if (fingerprint_hidl_gatekeeper_save_blob_to_file(filename, crypto_blob, crypto_blob_size, 0600))
                         success = TRUE;
                     else
                         g_warning("Could not save password handle");
@@ -845,8 +835,8 @@ fingerprint_hidl_gk_enroll(BiomFingerprintHidl* self, guint32 uid, const char* p
 }
 
 static gboolean
-fingerprint_hidl_gk_verify(BiomFingerprintHidl* self, guint32 uid, guint64 challenge,
-                           void* handle, guint32 handle_size, const char* password, void* auth_token)
+fingerprint_hidl_gatekeeper_verify(BiomFingerprintHidl* self, guint32 uid, guint64 challenge,
+                                   void* handle, guint32 handle_size, const char* password, void* auth_token)
 {
     const gint gk_code = GK_VERIFY;
     GBinderLocalRequest* req;
@@ -896,7 +886,7 @@ fingerprint_hidl_gk_verify(BiomFingerprintHidl* self, guint32 uid, guint64 chall
         goto cleanup;
     }
 
-    g_debug("Gatekeeper verify timeout: %d, gk code: %d", gatekeeper_response->timeout, gatekeeper_response->code);
+    g_debug("Gatekeeper verify timeout: %d, gatekeeper status code: %d", gatekeeper_response->timeout, gatekeeper_response->code);
 
     // hw_auth_token_t must be 69 bytes long
     if (auth_token && gatekeeper_response->data.count == 69) {
@@ -913,7 +903,7 @@ cleanup:
 }
 
 char*
-fingerprint_hidl_gk_delete_user(BiomFingerprintHidl* self, guint32 uid)
+fingerprint_hidl_gatekeeper_delete_user(BiomFingerprintHidl* self, guint32 uid)
 {
     const gint gk_code = GK_DELETE_USER;
     GBinderLocalRequest* req;
@@ -937,7 +927,7 @@ fingerprint_hidl_gk_delete_user(BiomFingerprintHidl* self, guint32 uid)
     g_debug("Gatekeeper delete user status %d", status);
 
     gatekeeper_response = gbinder_reader_read_hidl_struct(&reader, GatekeeperResponse);
-    g_debug("Gatekeeper delete user timeout: %d, gk code: %d", gatekeeper_response->timeout, gatekeeper_response->code);
+    g_debug("Gatekeeper delete user timeout: %d, gatekeeper status code: %d", gatekeeper_response->timeout, gatekeeper_response->code);
 
     crypto_blob = g_malloc(gatekeeper_response->data.count + 1);
     if (crypto_blob) {
@@ -1115,19 +1105,19 @@ fingerprint_hidl_perform_enrollment(BiomFingerprintHidl* self, const gchar* pass
         return FALSE;
     }
 
-    if (!fingerprint_hidl_gk_load_handle_file(0 /* uid */, &handle, &handle_size)) {
+    if (!fingerprint_hidl_gatekeeper_load_handle_file(0 /* uid */, &handle, &handle_size)) {
         g_debug("No existing handle found, enrolling password first");
-        fingerprint_hidl_gk_delete_user(self, 0 /* uid */);
-        fingerprint_hidl_gk_enroll(self, 0 /* uid */, password ? password : "default_password");
+        fingerprint_hidl_gatekeeper_delete_user(self, 0 /* uid */);
+        fingerprint_hidl_gatekeeper_enroll(self, 0 /* uid */, password ? password : "default_password");
 
-        if (!fingerprint_hidl_gk_load_handle_file(0 /* uid */, &handle, &handle_size)) {
+        if (!fingerprint_hidl_gatekeeper_load_handle_file(0 /* uid */, &handle, &handle_size)) {
             g_warning("Failed to load password handle after enrollment");
             g_free(auth_token);
             return FALSE;
         }
     }
 
-    verify_success = fingerprint_hidl_gk_verify(
+    verify_success = fingerprint_hidl_gatekeeper_verify(
         self,
         0,
         auth,
