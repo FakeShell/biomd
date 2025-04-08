@@ -679,6 +679,30 @@ handle_fingerprint_method_call(GDBusConnection *connection,
         }
 
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", success));
+    } else if (g_strcmp0(method_name, "GetFingerEnrollmentDate") == 0) {
+        const gchar *finger_name = NULL;
+        g_variant_get(parameters, "(&s)", &finger_name);
+
+        if (!is_valid_finger_name(finger_name)) {
+            g_dbus_method_invocation_return_error(invocation,
+                                                  G_DBUS_ERROR,
+                                                  G_DBUS_ERROR_INVALID_ARGS,
+                                                  "Invalid finger name: %s", finger_name ? finger_name : "(null)");
+            return;
+        }
+
+        guint32 finger_id = database_get_finger_id(finger_name);
+        gint64 enrollment_date = 0;
+
+        if (finger_id > 0) {
+            enrollment_date = (gint64)database_get_finger_enrolled_time(finger_id);
+            g_debug("Retrieved enrollment date for finger '%s' (ID: %u): %ld",
+                    finger_name, finger_id, (long)enrollment_date);
+        } else {
+            g_debug("Finger '%s' not found in database", finger_name);
+        }
+
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(x)", enrollment_date));
     } else {
         g_dbus_method_invocation_return_error(invocation,
                                               G_DBUS_ERROR,
