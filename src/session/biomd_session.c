@@ -474,6 +474,70 @@ biomd_stop_identify(BiometricSession *session)
     return success;
 }
 
+static gchar **
+get_enrolled_fingers(BiometricSession *session, gsize *num_fingers)
+{
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GVariant) result = NULL;
+    g_autoptr(GVariant) enrolled_fingers_variant = NULL;
+    gchar **fingers = NULL;
+
+    if (session->biomd_proxy == NULL) {
+        g_autoptr(GError) proxy_error = NULL;
+
+        g_debug("Biomd proxy is null, recreating dbus proxy");
+
+        session->biomd_proxy = g_dbus_proxy_new_for_bus_sync(
+            G_BUS_TYPE_SYSTEM,
+            G_DBUS_PROXY_FLAGS_NONE,
+            NULL,
+            "io.FuriOS.Biomd",
+            "/io/FuriOS/Biomd/Fingerprint",
+            "io.FuriOS.Biomd.Fingerprint",
+            NULL,
+            &proxy_error
+        );
+
+        if (proxy_error) {
+            g_warning("Failed to create biomd proxy: %s", proxy_error->message);
+            *num_fingers = 0;
+            return NULL;
+        }
+    }
+
+    result = g_dbus_proxy_call_sync(
+        session->biomd_proxy,
+        "org.freedesktop.DBus.Properties.Get",
+        g_variant_new("(ss)", "io.FuriOS.Biomd.Fingerprint", "EnrolledFingers"),
+        G_DBUS_CALL_FLAGS_NONE,
+        -1,
+        NULL,
+        &error
+    );
+
+    if (error) {
+        g_warning("Failed to get EnrolledFingers property: %s", error->message);
+        *num_fingers = 0;
+        return NULL;
+    }
+
+    g_variant_get(result, "(v)", &enrolled_fingers_variant);
+    fingers = g_variant_dup_strv(enrolled_fingers_variant, num_fingers);
+
+    return fingers;
+}
+
+static gboolean
+has_enrolled_fingers(BiometricSession *session)
+{
+    gsize num_fingers = 0;
+    gchar **fingers = get_enrolled_fingers(session, &num_fingers);
+    gboolean has_fingers = (fingers != NULL && num_fingers > 0);
+
+    g_strfreev(fingers);
+    return has_fingers;
+}
+
 static gboolean
 biomd_identify(BiometricSession *session)
 {
@@ -506,6 +570,14 @@ biomd_identify(BiometricSession *session)
         }
     }
 
+    /* Check if there are any enrolled fingers */
+    if (!has_enrolled_fingers(session)) {
+        g_debug("No fingerprints enrolled, skipping identification");
+        session->in_progress = FALSE;
+        return FALSE;
+    }
+
+    /* Proceed with identification */
     result = g_dbus_proxy_call_sync(
         session->biomd_proxy,
         "Identify",
@@ -538,6 +610,13 @@ static void
 restart_identify(BiometricSession *session)
 {
     g_debug("Stopping current identification and starting a new one...");
+
+    if (!has_enrolled_fingers(session)) {
+        g_debug("No fingerprints enrolled, skipping identification");
+        biomd_stop_identify(session);
+        session->in_progress = FALSE;
+        return;
+    }
 
     if (biomd_stop_identify(session)) {
         session->in_progress = TRUE;
@@ -603,6 +682,7 @@ on_biomd_signal(GDBusConnection *connection, const gchar *sender_name,
         } else if (error_code == ERROR_CANCELED && wlrdisplay_status() != 0) {
             g_debug("Operation canceled and display is off. Stopping attempts.");
             session->in_progress = FALSE;
+            biomd_stop_identify(session);
         } else if (error_code == ERROR_CANCELED && wlrdisplay_status() == 0 && screen_locked) {
             g_debug("Fingerprint timed out. Waiting for finger identification again...");
             restart_identify(session);
@@ -610,6 +690,7 @@ on_biomd_signal(GDBusConnection *connection, const gchar *sender_name,
             if (!screen_locked)
                 g_debug("Operation canceled and display is unlocked. Stopping attempts.");
             session->in_progress = FALSE;
+            biomd_stop_identify(session);
         }
     }
 }
@@ -620,6 +701,13 @@ start_unlock_attempt(BiometricSession *session)
     if (session->in_progress) {
         g_debug("Unlock attempt already in progress, stopping and restarting...");
         restart_identify(session);
+        return;
+    }
+
+    if (!has_enrolled_fingers(session)) {
+        g_debug("No fingerprints enrolled, skipping identification");
+        biomd_stop_identify(session);
+        session->in_progress = FALSE;
         return;
     }
 
