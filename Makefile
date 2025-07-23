@@ -47,7 +47,7 @@ $(TARGET_PAM):
 clean:
 	rm -f $(TARGET) $(TARGET_SESSION) $(TARGET_FPRINTD) $(TARGET_PAM)
 
-install:
+install: all
 	install -d $(DESTDIR)$(PREFIX)/sbin
 	install -m 0755 $(TARGET) $(DESTDIR)$(PREFIX)/sbin/
 
