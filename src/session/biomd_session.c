@@ -203,6 +203,7 @@ get_session_id(BiometricSession *session)
                 g_free(session_id);
                 g_free(username);
                 g_free(seat);
+                g_free(path);
                 continue;
             }
 
@@ -222,6 +223,7 @@ get_session_id(BiometricSession *session)
                 g_free(session_id);
                 g_free(username);
                 g_free(seat);
+                g_free(path);
                 continue;
             }
 
@@ -235,12 +237,14 @@ get_session_id(BiometricSession *session)
                 g_free(session_id);
                 g_free(username);
                 g_free(seat);
+                g_free(path);
                 break;
             }
 
             g_free(session_id);
             g_free(username);
             g_free(seat);
+            g_free(path);
         }
 
         if (found_session_id)
@@ -635,7 +639,7 @@ on_biomd_signal(GDBusConnection *connection, const gchar *sender_name,
     BiometricSession *session = (BiometricSession *)user_data;
 
     if (g_strcmp0(signal_name, "Identified") == 0) {
-        const gchar *finger_name;
+        g_autofree gchar *finger_name = NULL;
         g_variant_get(parameters, "(s)", &finger_name);
         g_debug("Identified finger: %s", finger_name);
 
@@ -724,7 +728,7 @@ on_properties_changed(GDBusConnection *connection, const gchar *sender_name,
     BiometricSession *session = (BiometricSession *)user_data;
     const gchar *changed_interface;
     GVariant *changed_properties;
-    const gchar **invalidated_properties;
+    g_autofree const gchar **invalidated_properties = NULL;
     GVariantIter iter;
     const gchar *key;
     GVariant *value;
