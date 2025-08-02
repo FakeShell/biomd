@@ -261,46 +261,52 @@ get_property_string_array(GDBusProxy *proxy, const gchar *property_name)
 static void
 emit_verify_finger_selected(Fprintd *self, const gchar *finger_name)
 {
+    g_autoptr(GError) error = NULL;
+
     g_debug("Emitting VerifyFingerSelected signal with finger: %s", finger_name);
-    g_dbus_connection_emit_signal(
+    if (!g_dbus_connection_emit_signal(
         self->conn,
         NULL,
         FPRINT_DEVICE_DBUS_PATH,
         FPRINT_DEVICE_DBUS_INTERFACE,
         "VerifyFingerSelected",
         g_variant_new("(s)", finger_name),
-        NULL
-    );
+        &error))
+        g_warning("Failed to emit VerifyFingerSelected signal: %s", error->message);
 }
 
 static void
 emit_verify_status(Fprintd *self, const gchar *result, gboolean done)
 {
+    g_autoptr(GError) error = NULL;
+
     g_debug("Emitting VerifyStatus signal with result: %s, done: %d", result, done);
-    g_dbus_connection_emit_signal(
+    if (!g_dbus_connection_emit_signal(
         self->conn,
         NULL,
         FPRINT_DEVICE_DBUS_PATH,
         FPRINT_DEVICE_DBUS_INTERFACE,
         "VerifyStatus",
         g_variant_new("(sb)", result, done),
-        NULL
-    );
+        &error))
+        g_warning("Failed to emit VerifyStatus signal: %s", error->message);
 }
 
 static void
 emit_enroll_status(Fprintd *self, const gchar *result, gboolean done)
 {
+    g_autoptr(GError) error = NULL;
+
     g_debug("Emitting EnrollStatus signal with result: %s, done: %d", result, done);
-    g_dbus_connection_emit_signal(
+    if (!g_dbus_connection_emit_signal(
         self->conn,
         NULL,
         FPRINT_DEVICE_DBUS_PATH,
         FPRINT_DEVICE_DBUS_INTERFACE,
         "EnrollStatus",
         g_variant_new("(sb)", result, done),
-        NULL
-    );
+        &error))
+        g_warning("Failed to emit EnrollStatus signal: %s", error->message);
 }
 
 static gboolean
@@ -637,10 +643,10 @@ handle_method_call(GDBusConnection *connection,
 
     if (g_strcmp0(interface_name, FPRINT_MANAGER_DBUS_INTERFACE) == 0) {
         if (g_strcmp0(method_name, "GetDevices") == 0) {
-            GVariantBuilder builder;
-            g_variant_builder_init(&builder, G_VARIANT_TYPE("ao"));
-            g_variant_builder_add(&builder, "o", FPRINT_DEVICE_DBUS_PATH);
-            g_dbus_method_invocation_return_value(invocation, g_variant_new("(ao)", &builder));
+            g_autoptr(GVariantBuilder) builder = NULL;
+            builder = g_variant_builder_new(G_VARIANT_TYPE("ao"));
+            g_variant_builder_add(builder, "o", FPRINT_DEVICE_DBUS_PATH);
+            g_dbus_method_invocation_return_value(invocation, g_variant_new("(ao)", builder));
             return;
         } else if (g_strcmp0(method_name, "GetDefaultDevice") == 0) {
             g_dbus_method_invocation_return_value(invocation, g_variant_new("(o)", FPRINT_DEVICE_DBUS_PATH));
@@ -650,6 +656,7 @@ handle_method_call(GDBusConnection *connection,
 
     if (g_strcmp0(interface_name, FPRINT_DEVICE_DBUS_INTERFACE) == 0) {
         if (g_strcmp0(method_name, "ListEnrolledFingers") == 0) {
+            g_autoptr(GVariantBuilder) builder = NULL;
             const gchar *username;
             g_variant_get(parameters, "(&s)", &username);
 
@@ -664,14 +671,13 @@ handle_method_call(GDBusConnection *connection,
                 return;
             }
 
-            GVariantBuilder builder;
-            g_variant_builder_init(&builder, G_VARIANT_TYPE("as"));
+            builder = g_variant_builder_new(G_VARIANT_TYPE("as"));
 
             for (guint i = 0; enrolled_fingers[i] != NULL; i++) {
-                g_variant_builder_add(&builder, "s", enrolled_fingers[i]);
+                g_variant_builder_add(builder, "s", enrolled_fingers[i]);
             }
 
-            g_dbus_method_invocation_return_value(invocation, g_variant_new("(as)", &builder));
+            g_dbus_method_invocation_return_value(invocation, g_variant_new("(as)", builder));
             return;
         } else if (g_strcmp0(method_name, "DeleteEnrolledFingers") == 0 ||
                    g_strcmp0(method_name, "DeleteEnrolledFingers2") == 0) {
@@ -1104,6 +1110,9 @@ main(int argc, char *argv[])
 
     if (self.biomd_proxy)
         g_object_unref(self.biomd_proxy);
+
+    if (self.conn)
+        g_object_unref(self.conn);
 
     g_clear_pointer(&self.verify_finger, g_free);
 
