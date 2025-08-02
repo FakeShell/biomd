@@ -33,10 +33,7 @@ typedef struct {
     gchar *verify_finger;
 
     BiometricState state;
-    BiometricError error_info;
     BiometricAcquisition acquisition_info;
-    gboolean hardware_available;
-    GStrv enrolled_fingers;
 } Fprintd;
 
 static const gchar manager_introspection_xml[] =
@@ -396,14 +393,7 @@ update_biomd_properties(Fprintd *self)
 {
     if (self->biomd_proxy) {
         self->state = get_property_int(self->biomd_proxy, "State", STATE_IDLE);
-        self->error_info = get_property_int(self->biomd_proxy, "ErrorInfo", ERROR_NONE);
         self->acquisition_info = get_property_int(self->biomd_proxy, "AcquisitionInfo", ACQUISITION_NONE);
-        self->hardware_available = get_property_boolean(self->biomd_proxy, "HardwareAvailable", FALSE);
-
-        if (self->enrolled_fingers)
-            g_strfreev(self->enrolled_fingers);
-
-        self->enrolled_fingers = get_property_string_array(self->biomd_proxy, "EnrolledFingers");
         self->enroll_progress = get_property_int(self->biomd_proxy, "EnrollmentProgress", 0);
     }
 }
@@ -516,7 +506,6 @@ on_biomd_error_info_changed(GDBusConnection *connection,
     g_variant_get(parameters, "(i)", &error_code);
 
     g_debug("Biomd error info changed: %d", error_code);
-    self->error_info = error_code;
 
     if (self->verify_in_progress) {
         g_autoptr(GError) error = NULL;
@@ -630,27 +619,6 @@ on_biomd_acquisition_info_changed(GDBusConnection *connection,
 }
 
 static void
-on_biomd_enrolled_fingers_changed(GDBusConnection *connection,
-                                  const gchar *sender_name,
-                                  const gchar *object_path,
-                                  const gchar *interface_name,
-                                  const gchar *signal_name,
-                                  GVariant *parameters,
-                                  gpointer user_data)
-{
-    Fprintd *self = (Fprintd *)user_data;
-    g_autoptr(GVariant) array_variant;
-
-    if (self->enrolled_fingers)
-        g_strfreev(self->enrolled_fingers);
-
-    array_variant = g_variant_get_child_value(parameters, 0);
-    self->enrolled_fingers = g_variant_dup_strv(array_variant, NULL);
-
-    g_debug("Enrolled fingers changed");
-}
-
-static void
 handle_method_call(GDBusConnection *connection,
                    const gchar *sender,
                    const gchar *object_path,
@@ -685,12 +653,9 @@ handle_method_call(GDBusConnection *connection,
             const gchar *username;
             g_variant_get(parameters, "(&s)", &username);
 
-            if (self->enrolled_fingers)
-                g_strfreev(self->enrolled_fingers);
+            g_auto(GStrv) enrolled_fingers = get_property_string_array(self->biomd_proxy, "EnrolledFingers");
 
-            self->enrolled_fingers = get_property_string_array(self->biomd_proxy, "EnrolledFingers");
-
-            if (self->enrolled_fingers == NULL || g_strv_length(self->enrolled_fingers) == 0) {
+            if (enrolled_fingers == NULL || g_strv_length(enrolled_fingers) == 0) {
                 g_dbus_method_invocation_return_dbus_error(
                     invocation,
                     "net.reactivated.Fprint.Error.NoEnrolledPrints",
@@ -702,24 +667,21 @@ handle_method_call(GDBusConnection *connection,
             GVariantBuilder builder;
             g_variant_builder_init(&builder, G_VARIANT_TYPE("as"));
 
-            for (guint i = 0; self->enrolled_fingers[i] != NULL; i++) {
-                g_variant_builder_add(&builder, "s", self->enrolled_fingers[i]);
+            for (guint i = 0; enrolled_fingers[i] != NULL; i++) {
+                g_variant_builder_add(&builder, "s", enrolled_fingers[i]);
             }
 
             g_dbus_method_invocation_return_value(invocation, g_variant_new("(as)", &builder));
             return;
         } else if (g_strcmp0(method_name, "DeleteEnrolledFingers") == 0 ||
                    g_strcmp0(method_name, "DeleteEnrolledFingers2") == 0) {
-            if (self->enrolled_fingers)
-                g_strfreev(self->enrolled_fingers);
+            g_auto(GStrv) enrolled_fingers = get_property_string_array(self->biomd_proxy, "EnrolledFingers");
 
-            self->enrolled_fingers = get_property_string_array(self->biomd_proxy, "EnrolledFingers");
-
-            if (self->enrolled_fingers != NULL) {
-                for (guint i = 0; self->enrolled_fingers[i] != NULL; i++) {
+            if (enrolled_fingers != NULL) {
+                for (guint i = 0; enrolled_fingers[i] != NULL; i++) {
                     g_autoptr(GError) remove_error = NULL;
-                    if (!biomd_remove_finger(self, self->enrolled_fingers[i], &remove_error))
-                        g_warning("Failed to remove finger %s: %s", self->enrolled_fingers[i], remove_error->message);
+                    if (!biomd_remove_finger(self, enrolled_fingers[i], &remove_error))
+                        g_warning("Failed to remove finger %s: %s", enrolled_fingers[i], remove_error->message);
                 }
             }
 
@@ -780,12 +742,9 @@ handle_method_call(GDBusConnection *connection,
             g_clear_pointer(&self->verify_finger, g_free);
             self->verify_finger = g_strdup(finger_name);
 
-            if (self->enrolled_fingers)
-                g_strfreev(self->enrolled_fingers);
+            g_auto(GStrv) enrolled_fingers = get_property_string_array(self->biomd_proxy, "EnrolledFingers");
 
-            self->enrolled_fingers = get_property_string_array(self->biomd_proxy, "EnrolledFingers");
-
-            if (self->enrolled_fingers == NULL || g_strv_length(self->enrolled_fingers) == 0) {
+            if (enrolled_fingers == NULL || g_strv_length(enrolled_fingers) == 0) {
                 g_dbus_method_invocation_return_dbus_error(
                     invocation,
                     "net.reactivated.Fprint.Error.NoEnrolledPrints",
@@ -1076,19 +1035,6 @@ on_bus_acquired(GDBusConnection *connection,
         self,
         NULL
     );
-
-    g_dbus_connection_signal_subscribe(
-        connection,
-        BIOMD_DBUS_NAME,
-        BIOMD_DBUS_INTERFACE,
-        "EnrolledFingersChanged",
-        BIOMD_DBUS_PATH,
-        NULL,
-        G_DBUS_SIGNAL_FLAGS_NONE,
-        on_biomd_enrolled_fingers_changed,
-        self,
-        NULL
-    );
 }
 
 static void
@@ -1122,10 +1068,7 @@ main(int argc, char *argv[])
     self.enroll_progress = 0;
     self.verify_finger = NULL;
     self.state = STATE_IDLE;
-    self.error_info = ERROR_NONE;
     self.acquisition_info = ACQUISITION_NONE;
-    self.hardware_available = FALSE;
-    self.enrolled_fingers = NULL;
 
     g_autoptr(GError) error = NULL;
     self.manager_introspection_data = g_dbus_node_info_new_for_xml(manager_introspection_xml, &error);
@@ -1163,9 +1106,6 @@ main(int argc, char *argv[])
         g_object_unref(self.biomd_proxy);
 
     g_clear_pointer(&self.verify_finger, g_free);
-
-    if (self.enrolled_fingers)
-        g_strfreev(self.enrolled_fingers);
 
     return 0;
 }
