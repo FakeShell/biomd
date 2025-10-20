@@ -34,6 +34,7 @@ Package: biomd-fprintd
 Architecture: any
 Depends: ${misc:Depends},
          ${shlibs:Depends},
+         fprintd,
 Description: Biometric service provider
  Biomd provides biometric services such as Fingerprint - Fprintd provider
 
