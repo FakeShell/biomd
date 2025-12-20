@@ -8,6 +8,7 @@
 typedef struct {
     guint biomd_registration_id;
     guint fingerprint_registration_id;
+    guint face_registration_id;
 } BiomService;
 
 BiomService *service_state = NULL;
@@ -18,9 +19,11 @@ biomd_init(GDBusConnection *connection, GError **error)
     service_state = g_new0(BiomService, 1);
     service_state->biomd_registration_id = 0;
     service_state->fingerprint_registration_id = 0;
+    service_state->face_registration_id = 0;
 
     manager_init(connection);
     fingerprint_init(connection);
+    face_init(connection);
 
     service_state->biomd_registration_id = manager_register(connection, error);
     if (*error != NULL) {
@@ -33,6 +36,16 @@ biomd_init(GDBusConnection *connection, GError **error)
     service_state->fingerprint_registration_id = fingerprint_register(connection, error);
     if (*error != NULL) {
         g_warning("Registering fingerprint: %s\n", (*error)->message);
+        g_dbus_connection_unregister_object(connection, service_state->biomd_registration_id);
+        g_free(service_state);
+        service_state = NULL;
+        return FALSE;
+    }
+
+    service_state->face_registration_id = face_register(connection, error);
+    if (*error != NULL) {
+        g_warning("Registering face: %s\n", (*error)->message);
+        g_dbus_connection_unregister_object(connection, service_state->fingerprint_registration_id);
         g_dbus_connection_unregister_object(connection, service_state->biomd_registration_id);
         g_free(service_state);
         service_state = NULL;
@@ -68,8 +81,14 @@ biomd_cleanup(GDBusConnection *connection)
         service_state->fingerprint_registration_id = 0;
     }
 
+    if (service_state->face_registration_id > 0) {
+        g_dbus_connection_unregister_object(connection, service_state->face_registration_id);
+        service_state->face_registration_id = 0;
+    }
+
     manager_cleanup(connection);
     fingerprint_cleanup(connection);
+    face_cleanup(connection);
 
     g_free(service_state);
     service_state = NULL;

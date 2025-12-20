@@ -12,5 +12,6 @@
 #include "introspect.h"
 #include "manager.h"
 #include "fingerprint.h"
+#include "face.h"
 
 #endif /* BIOMD_H */

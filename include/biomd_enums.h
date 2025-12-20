@@ -44,4 +44,22 @@ typedef enum {
     ACQUISITION_TOO_FAST = 6        /**< Swipe too fast */
 } BiometricAcquisition;
 
+/**
+ * Face frame pixel format
+ */
+typedef enum {
+    FACE_FRAME_FORMAT_BGR  = 0,  /**< Blue-Green-Red pixel format */
+    FACE_FRAME_FORMAT_RGB  = 1,  /**< Red-Green-Blue pixel format */
+    FACE_FRAME_FORMAT_GRAY = 2   /**< Grayscale pixel format */
+} FaceFrameFormat;
+
+/**
+ * Face recognition implementation type
+ */
+typedef enum {
+    TYPE_UNKNOWN  = 0,  /**< Implementation type is unknown */
+    TYPE_SOFTWARE = 1,  /**< Software-based implementation */
+    TYPE_HARDWARE = 2   /**< Hardware-accelerated implementation */
+} FaceImplementationType;
+
 #endif // BIOMD_ENUMS_H

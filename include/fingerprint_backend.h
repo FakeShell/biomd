@@ -135,7 +135,7 @@ struct _FingerprintBackend {
 * @param callbacks Callback functions to be invoked by the backend
 * @return A new FingerprintBackend instance or NULL on failure
 */
-FingerprintBackend*
+FingerprintBackend *
 fingerprint_backend_new(FingerprintBackendVTable vtable,
                         FingerprintBackendCallbacks callbacks);
 

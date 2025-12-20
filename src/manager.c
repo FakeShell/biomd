@@ -23,7 +23,7 @@ handle_biomd_method_call(GDBusConnection *connection,
                          gpointer user_data)
 {
     if (g_strcmp0(method_name, "GetSupportedModules") == 0) {
-        const gchar *modules[] = {"Fingerprint", NULL};
+        const gchar *modules[] = {"Fingerprint", "Face", NULL};
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(^as)", modules));
     } else if (g_strcmp0(method_name, "Ping") == 0) {
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", TRUE));

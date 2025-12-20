@@ -1,10 +1,14 @@
 CC = gcc
+
 CFLAGS = `pkg-config --cflags gio-2.0 glib-2.0 libgbinder sqlite3` -Iinclude
-LDFLAGS = `pkg-config --libs gio-2.0 glib-2.0 libgbinder sqlite3`
+LDFLAGS = `pkg-config --libs gio-2.0 glib-2.0 libgbinder sqlite3` -lfart -lcrypto
+
 CFLAGS_SESSION = `pkg-config --cflags gio-2.0 glib-2.0` -Iinclude
 LDFLAGS_SESSION = `pkg-config --libs gio-2.0 glib-2.0`
+
 CFLAGS_FPRINTD = `pkg-config --cflags gio-2.0 glib-2.0` -Iinclude
 LDFLAGS_FPRINTD = `pkg-config --libs gio-2.0 glib-2.0`
+
 CFLAGS_PAM = -fPIC -fno-stack-protector `pkg-config --cflags gio-2.0 glib-2.0` -Iinclude
 LDFLAGS_PAM = -shared -lpam -lpthread `pkg-config --libs gio-2.0 glib-2.0`
 
@@ -15,7 +19,12 @@ SOURCES = src/biomd.c \
           src/fingerprint_hidl_backend.c \
           src/fingerprint_binder_hidl.c \
           src/database.c \
-          src/fpd_compat.c
+          src/fpd_compat.c \
+          src/face.c \
+          src/face_backend.c \
+          src/face_fart_backend.c \
+          src/face_tensorflow_fart.c
+
 SOURCES_SESSION = src/session/biomd_session.c src/session/logind.c
 SOURCES_FPRINTD = src/fprintd/fprintd.c
 SOURCES_PAM = src/pam/pam_biomd.c
@@ -25,6 +34,7 @@ TARGET_CLIENT = client/biomdctl.py
 TARGET_SESSION = biomd-session
 TARGET_FPRINTD = biomd-fprintd
 TARGET_PAM = pam_biomd.so
+
 HEADERS = include/biomd_enums.h
 
 PREFIX ?= /usr

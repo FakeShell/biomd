@@ -4,13 +4,8 @@
  */
 
 #include "fingerprint_binder_hidl.h"
-#include <stdio.h>
-#include <gbinder.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <glib.h>
 #include <sys/stat.h>
-#include <unistd.h>
+#include <gbinder.h>
 
 #define FP_IFACE_PREFIX                  "android.hardware.biometrics.fingerprint@"
 #define FP_IFACE(x)                      FP_IFACE_PREFIX "2.1::" x

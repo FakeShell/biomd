@@ -45,7 +45,7 @@ typedef enum {
 * @param callbacks Callback functions to be invoked by the backend
 * @return A new FingerprintBackend instance or NULL if creation failed
 */
-FingerprintBackend*
+FingerprintBackend *
 fingerprint_hidl_backend_new(FingerprintBackendCallbacks callbacks);
 
 #endif // FINGERPRINT_HIDL_BACKEND_H
