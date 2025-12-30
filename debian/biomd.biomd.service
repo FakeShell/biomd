@@ -5,7 +5,6 @@ After=lxc@android.service
 [Service]
 Type=dbus
 BusName=io.FuriOS.Biomd
-ExecStartPre=/usr/bin/binder-wait android.hardware.biometrics.fingerprint@2.1::IBiometricsFingerprint/default
 ExecStart=/usr/sbin/biomd
 Restart=always
 RestartSec=5
