@@ -359,6 +359,42 @@ is_screen_locked(BiometricSession *session)
     return is_locked;
 }
 
+static gboolean
+is_fingerprint_hardware_available (BiometricSession *session)
+{
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GVariant) result = NULL;
+    g_autoptr(GVariant) value_variant = NULL;
+    gboolean available = FALSE;
+
+    g_return_val_if_fail(session != NULL, FALSE);
+
+    if (session->biomd_proxy == NULL) {
+        g_warning("biomd_proxy is NULL; cannot query HardwareAvailable");
+        return FALSE;
+    }
+
+    result = g_dbus_proxy_call_sync(
+        session->biomd_proxy,
+        "org.freedesktop.DBus.Properties.Get",
+        g_variant_new("(ss)", "io.FuriOS.Biomd.Fingerprint", "HardwareAvailable"),
+        G_DBUS_CALL_FLAGS_NONE,
+        -1,
+        NULL,
+        &error
+    );
+
+    if (error) {
+        g_warning("Failed to get HardwareAvailable property: %s", error->message);
+        return FALSE;
+    }
+
+    g_variant_get(result, "(v)", &value_variant);
+    available = g_variant_get_boolean(value_variant);
+
+    return available;
+}
+
 static gint
 unlock_session(BiometricSession *session)
 {
@@ -431,6 +467,11 @@ biomd_stop_identify(BiometricSession *session)
     g_autoptr(GError) error = NULL;
     g_autoptr(GVariant) result = NULL;
     gboolean success = FALSE;
+
+    if (!is_fingerprint_hardware_available(session)) {
+        g_debug("Fingerprint hardware not available, no need to stop identification");
+        return FALSE;
+    }
 
     g_debug("Stopping identification process...");
 
@@ -716,6 +757,11 @@ start_unlock_attempt(BiometricSession *session)
         return;
     }
 
+    if (!is_fingerprint_hardware_available(session)) {
+        g_debug("Fingerprint hardware not available, cannot make any unlock attempts");
+        return;
+    }
+
     if (!has_enrolled_fingers(session)) {
         g_debug("No fingerprints enrolled, skipping identification");
         biomd_stop_identify(session);
@@ -930,31 +976,37 @@ setup_dbus_connection(BiometricSession *session)
 
     g_debug("Subscribed to PropertiesChanged signal for session (ID: %u)", session->properties_changed_id);
 
-    session->identified_signal_id = g_dbus_connection_signal_subscribe(
-        session->connection,
-        "io.FuriOS.Biomd",
-        "io.FuriOS.Biomd.Fingerprint",
-        "Identified",
-        "/io/FuriOS/Biomd/Fingerprint",
-        NULL,
-        G_DBUS_SIGNAL_FLAGS_NONE,
-        on_biomd_signal,
-        session,
-        NULL
-    );
+    if (is_fingerprint_hardware_available(session)) {
+        session->identified_signal_id = g_dbus_connection_signal_subscribe(
+            session->connection,
+            "io.FuriOS.Biomd",
+            "io.FuriOS.Biomd.Fingerprint",
+            "Identified",
+            "/io/FuriOS/Biomd/Fingerprint",
+            NULL,
+            G_DBUS_SIGNAL_FLAGS_NONE,
+            on_biomd_signal,
+            session,
+            NULL
+        );
 
-    session->error_info_changed_id = g_dbus_connection_signal_subscribe(
-        session->connection,
-        "io.FuriOS.Biomd",
-        "io.FuriOS.Biomd.Fingerprint",
-        "ErrorInfoChanged",
-        "/io/FuriOS/Biomd/Fingerprint",
-        NULL,
-        G_DBUS_SIGNAL_FLAGS_NONE,
-        on_biomd_signal,
-        session,
-        NULL
-    );
+        session->error_info_changed_id = g_dbus_connection_signal_subscribe(
+            session->connection,
+            "io.FuriOS.Biomd",
+            "io.FuriOS.Biomd.Fingerprint",
+            "ErrorInfoChanged",
+            "/io/FuriOS/Biomd/Fingerprint",
+            NULL,
+            G_DBUS_SIGNAL_FLAGS_NONE,
+            on_biomd_signal,
+            session,
+            NULL
+        );
+    } else {
+        g_debug("Fingerprint hardware not available, not subscribing to biomd fingerprint signals");
+        session->identified_signal_id = 0;
+        session->error_info_changed_id = 0;
+    }
 
     g_debug("Connected to session %s for property changes", session->session_id);
 }
