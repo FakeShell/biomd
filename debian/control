@@ -8,8 +8,8 @@ Build-Depends: debhelper-compat (= 13),
                libsqlite3-dev,
                dh-python,
                python3,
-               batman-dev,
                libpam0g-dev,
+               libwayland-dev,
 Standards-Version: 4.7.0
 Vcs-Browser: https://github.com/furilabs/biomd
 Vcs-Git: https://github.com/furilabs/biomd.git
@@ -20,7 +20,6 @@ Depends: ${misc:Depends},
          ${python3:Depends},
          ${shlibs:Depends},
          python3-dbus,
-         libbatman-wrappers (>= 33),
 Description: Biometric service provider
  Biomd provides biometric services such as Fingerprint
 

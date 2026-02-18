@@ -5,8 +5,9 @@
 
 #include <glib.h>
 #include <gio/gio.h>
-#include <batman/wlrdisplay.h>
+
 #include "biomd_enums.h"
+#include "logind.h"
 
 typedef struct {
     GDBusConnection *connection;
@@ -21,10 +22,19 @@ typedef struct {
 
     gchar *session_id;
     gboolean in_progress;
+
+    LogindMonitor *logind;
 } BiometricSession;
 
 static void
 setup_dbus_connection(BiometricSession *session);
+
+static gboolean
+screen_is_on(BiometricSession *session)
+{
+    LogindScreenState s = logind_monitor_get_screen_state(session->logind);
+    return (s != LOGIND_SCREEN_OFF);
+}
 
 static gboolean
 is_keyring_locked(BiometricSession *session)
@@ -71,13 +81,6 @@ is_keyring_locked(BiometricSession *session)
     is_locked = g_variant_get_boolean(value_variant);
 
     return is_locked;
-}
-
-static gint
-wlrdisplay_status(void)
-{
-    gint result = get_wlroots_screen_status();
-    return result != 0;
 }
 
 static void
@@ -636,6 +639,11 @@ on_biomd_signal(GDBusConnection *connection, const gchar *sender_name,
                 const gchar *signal_name, GVariant *parameters,
                 gpointer user_data)
 {
+    (void)connection;
+    (void)sender_name;
+    (void)object_path;
+    (void)interface_name;
+
     BiometricSession *session = (BiometricSession *)user_data;
 
     if (g_strcmp0(signal_name, "Identified") == 0) {
@@ -646,7 +654,7 @@ on_biomd_signal(GDBusConnection *connection, const gchar *sender_name,
         gboolean keyring_locked = is_keyring_locked(session);
         gboolean screen_locked = is_screen_locked(session);
 
-        if (wlrdisplay_status() == 0 && screen_locked && !keyring_locked) {
+        if (screen_is_on(session) && screen_locked && !keyring_locked) {
             send_feedback("button-released");
             unlock_session(session);
         } else {
@@ -654,7 +662,7 @@ on_biomd_signal(GDBusConnection *connection, const gchar *sender_name,
                 g_debug("Keyring is still locked, discarding fingerprint request");
             if (!screen_locked)
                 g_debug("Screen is unlocked, discarding fingerprint request");
-            if (wlrdisplay_status() != 0)
+            if (!screen_is_on(session))
                 g_debug("Display is off, discarding fingerprint request");
         }
 
@@ -681,13 +689,13 @@ on_biomd_signal(GDBusConnection *connection, const gchar *sender_name,
         g_debug("Error info: %s", error_info);
         gboolean screen_locked = is_screen_locked(session);
 
-        if (error_code == ERROR_FINGER_NOT_RECOGNIZED && wlrdisplay_status() == 0 && screen_locked) {
+        if (error_code == ERROR_FINGER_NOT_RECOGNIZED && screen_is_on(session) && screen_locked) {
             send_feedback("window-close");
-        } else if (error_code == ERROR_CANCELED && wlrdisplay_status() != 0) {
+        } else if (error_code == ERROR_CANCELED && !screen_is_on(session)) {
             g_debug("Operation canceled and display is off. Stopping attempts.");
             session->in_progress = FALSE;
             biomd_stop_identify(session);
-        } else if (error_code == ERROR_CANCELED && wlrdisplay_status() == 0 && screen_locked) {
+        } else if (error_code == ERROR_CANCELED && screen_is_on(session) && screen_locked) {
             g_debug("Fingerprint timed out. Waiting for finger identification again...");
             restart_identify(session);
         } else {
@@ -725,6 +733,12 @@ on_properties_changed(GDBusConnection *connection, const gchar *sender_name,
                       const gchar *signal_name, GVariant *parameters,
                       gpointer user_data)
 {
+    (void)connection;
+    (void)sender_name;
+    (void)object_path;
+    (void)interface_name;
+    (void)signal_name;
+
     BiometricSession *session = (BiometricSession *)user_data;
     const gchar *changed_interface;
     GVariant *changed_properties;
@@ -946,7 +960,7 @@ setup_dbus_connection(BiometricSession *session)
 }
 
 int
-main(int argc, char *argv[])
+main(void)
 {
     g_log_set_handler(NULL, G_LOG_LEVEL_MASK, g_log_default_handler, NULL);
 
@@ -956,6 +970,8 @@ main(int argc, char *argv[])
     session->properties_changed_id = 0;
     session->identified_signal_id = 0;
     session->error_info_changed_id = 0;
+
+    session->logind = logind_monitor_new(NULL, NULL);
 
     session->session_id = get_session_id(session);
 
@@ -967,6 +983,7 @@ main(int argc, char *argv[])
     g_main_loop_run(loop);
 
     g_main_loop_unref(loop);
+
     if (session->login1_manager_proxy)
         g_object_unref(session->login1_manager_proxy);
     if (session->session_proxy)
@@ -975,6 +992,9 @@ main(int argc, char *argv[])
         g_object_unref(session->secrets_proxy);
     if (session->biomd_proxy)
         g_object_unref(session->biomd_proxy);
+
+    if (session->logind)
+        logind_monitor_free(session->logind);
 
     g_free(session->session_id);
     g_free(session);
