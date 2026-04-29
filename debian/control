@@ -10,6 +10,9 @@ Build-Depends: debhelper-compat (= 13),
                python3,
                libpam0g-dev,
                libwayland-dev,
+               libfart-dev,
+               libgstreamer1.0-dev,
+               libssl-dev,
 Standards-Version: 4.7.0
 Vcs-Browser: https://github.com/furilabs/biomd
 Vcs-Git: https://github.com/furilabs/biomd.git
