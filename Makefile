@@ -3,8 +3,8 @@ CC = gcc
 CFLAGS = `pkg-config --cflags gio-2.0 glib-2.0 libgbinder sqlite3` -Iinclude
 LDFLAGS = `pkg-config --libs gio-2.0 glib-2.0 libgbinder sqlite3` -lfart -lcrypto
 
-CFLAGS_SESSION = `pkg-config --cflags gio-2.0 glib-2.0` -Iinclude
-LDFLAGS_SESSION = `pkg-config --libs gio-2.0 glib-2.0`
+CFLAGS_SESSION = `pkg-config --cflags gio-2.0 glib-2.0 gstreamer-1.0` -Iinclude -Iinclude/session
+LDFLAGS_SESSION = `pkg-config --libs gio-2.0 glib-2.0 gstreamer-1.0`
 
 CFLAGS_FPRINTD = `pkg-config --cflags gio-2.0 glib-2.0` -Iinclude
 LDFLAGS_FPRINTD = `pkg-config --libs gio-2.0 glib-2.0`
@@ -25,7 +25,11 @@ SOURCES = src/biomd.c \
           src/face_fart_backend.c \
           src/face_tensorflow_fart.c
 
-SOURCES_SESSION = src/session/biomd_session.c src/session/logind.c
+SOURCES_SESSION = src/session/biomd_session.c \
+                  src/session/session_face.c \
+                  src/session/session_fingerprint.c \
+                  src/session/logind.c
+
 SOURCES_FPRINTD = src/fprintd/fprintd.c
 SOURCES_PAM = src/pam/pam_biomd.c
 
@@ -91,5 +95,6 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/lib/$(TRIPLET)/security/$(TARGET_PAM)
 	rm -f $(DESTDIR)$(PREFIX)/lib/systemd/user/biomd-session.service
 	rm -f $(DESTDIR)$(PREFIX)/lib/systemd/system/fprintd.service.d/10-biomd.conf
+	rm -f $(DESTDIR)$(PREFIX)/include/biomd/biomd_enums.h
 
 .PHONY: all clean install uninstall

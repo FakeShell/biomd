@@ -3,10 +3,9 @@
  * Copyright (C) 2025 Bardia Moshiri <bardia@furilabs.com>
  */
 
-#include <glib.h>
-#include <gio/gio.h>
-
 #include "biomd_enums.h"
+#include "session_fingerprint.h"
+#include "session_face.h"
 #include "logind.h"
 
 typedef struct {
@@ -14,14 +13,16 @@ typedef struct {
     GDBusProxy *login1_manager_proxy;
     GDBusProxy *session_proxy;
     GDBusProxy *secrets_proxy;
-    GDBusProxy *biomd_proxy;
 
     guint properties_changed_id;
-    guint identified_signal_id;
-    guint error_info_changed_id;
 
     gchar *session_id;
-    gboolean in_progress;
+
+    gboolean unlock_in_progress;
+    gboolean unlocked_this_attempt;
+
+    SessionFingerprint *fingerprint;
+    SessionFace *face;
 
     LogindMonitor *logind;
 } BiometricSession;
@@ -36,6 +37,43 @@ screen_is_on(BiometricSession *session)
     return (s != LOGIND_SCREEN_OFF);
 }
 
+static void
+send_feedback(const gchar *event)
+{
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GDBusProxy) feedbackd_proxy = NULL;
+    g_autoptr(GVariant) result = NULL;
+
+    feedbackd_proxy = g_dbus_proxy_new_for_bus_sync(
+        G_BUS_TYPE_SESSION,
+        G_DBUS_PROXY_FLAGS_NONE,
+        NULL,
+        "org.sigxcpu.Feedback",
+        "/org/sigxcpu/Feedback",
+        "org.sigxcpu.Feedback",
+        NULL,
+        &error
+    );
+
+    if (error) {
+        g_warning("Failed to create feedbackd proxy: %s", error->message);
+        return;
+    }
+
+    result = g_dbus_proxy_call_sync(
+        feedbackd_proxy,
+        "TriggerFeedback",
+        g_variant_new("(ssa{sv}i)", "biomd-session", event, NULL, -1),
+        G_DBUS_CALL_FLAGS_NONE,
+        -1,
+        NULL,
+        &error
+    );
+
+    if (error)
+        g_warning("Failed to trigger feedback: %s", error->message);
+}
+
 static gboolean
 is_keyring_locked(BiometricSession *session)
 {
@@ -43,6 +81,9 @@ is_keyring_locked(BiometricSession *session)
     g_autoptr(GVariant) result = NULL;
     g_autoptr(GVariant) value_variant = NULL;
     gboolean is_locked = FALSE;
+
+    if (!session)
+        return FALSE;
 
     if (session->secrets_proxy == NULL) {
         session->secrets_proxy = g_dbus_proxy_new_for_bus_sync(
@@ -81,43 +122,6 @@ is_keyring_locked(BiometricSession *session)
     is_locked = g_variant_get_boolean(value_variant);
 
     return is_locked;
-}
-
-static void
-send_feedback(const gchar *event)
-{
-    g_autoptr(GError) error = NULL;
-    g_autoptr(GDBusProxy) feedbackd_proxy = NULL;
-    g_autoptr(GVariant) result = NULL;
-
-    feedbackd_proxy = g_dbus_proxy_new_for_bus_sync(
-        G_BUS_TYPE_SESSION,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "org.sigxcpu.Feedback",
-        "/org/sigxcpu/Feedback",
-        "org.sigxcpu.Feedback",
-        NULL,
-        &error
-    );
-
-    if (error) {
-        g_warning("Failed to create feedbackd proxy: %s", error->message);
-        return;
-    }
-
-    result = g_dbus_proxy_call_sync(
-        feedbackd_proxy,
-        "TriggerFeedback",
-        g_variant_new("(ssa{sv}i)", "biomd-session", event, NULL, -1),
-        G_DBUS_CALL_FLAGS_NONE,
-        -1,
-        NULL,
-        &error
-    );
-
-    if (error)
-        g_warning("Failed to trigger feedback: %s", error->message);
 }
 
 static gchar *
@@ -181,10 +185,6 @@ get_session_id(BiometricSession *session)
 
         g_variant_get(reply, "(a(susso))", &iter);
         found_session_id = NULL;
-        session_id = NULL;
-        username = NULL;
-        seat = NULL;
-        path = NULL;
 
         while (g_variant_iter_next(iter, "(susso)", &session_id, &uid, &username, &seat, &path)) {
             object_path = g_strdup(path);
@@ -267,6 +267,9 @@ is_screen_locked(BiometricSession *session)
     g_autoptr(GVariant) value_variant = NULL;
     gboolean is_locked = FALSE;
 
+    if (!session)
+        return FALSE;
+
     if (session->session_id == NULL)
         session->session_id = get_session_id(session);
 
@@ -286,7 +289,6 @@ is_screen_locked(BiometricSession *session)
 
         if (error) {
             g_warning("Failed to create session proxy: %s", error->message);
-
             g_free(session->session_id);
             session->session_id = get_session_id(session);
             return FALSE;
@@ -359,49 +361,16 @@ is_screen_locked(BiometricSession *session)
     return is_locked;
 }
 
-static gboolean
-is_fingerprint_hardware_available (BiometricSession *session)
-{
-    g_autoptr(GError) error = NULL;
-    g_autoptr(GVariant) result = NULL;
-    g_autoptr(GVariant) value_variant = NULL;
-    gboolean available = FALSE;
-
-    g_return_val_if_fail(session != NULL, FALSE);
-
-    if (session->biomd_proxy == NULL) {
-        g_warning("biomd_proxy is NULL; cannot query HardwareAvailable");
-        return FALSE;
-    }
-
-    result = g_dbus_proxy_call_sync(
-        session->biomd_proxy,
-        "org.freedesktop.DBus.Properties.Get",
-        g_variant_new("(ss)", "io.FuriOS.Biomd.Fingerprint", "HardwareAvailable"),
-        G_DBUS_CALL_FLAGS_NONE,
-        -1,
-        NULL,
-        &error
-    );
-
-    if (error) {
-        g_warning("Failed to get HardwareAvailable property: %s", error->message);
-        return FALSE;
-    }
-
-    g_variant_get(result, "(v)", &value_variant);
-    available = g_variant_get_boolean(value_variant);
-
-    return available;
-}
-
-static gint
+static void
 unlock_session(BiometricSession *session)
 {
     g_autoptr(GError) error = NULL;
     g_autoptr(GVariant) result = NULL;
     g_autoptr(GError) retry_error = NULL;
     g_autoptr(GVariant) retry_result = NULL;
+
+    if (!session)
+        return;
 
     if (session->login1_manager_proxy == NULL) {
         session->login1_manager_proxy = g_dbus_proxy_new_for_bus_sync(
@@ -417,7 +386,7 @@ unlock_session(BiometricSession *session)
 
         if (error) {
             g_warning("Failed to create login1 manager proxy: %s", error->message);
-            return 1;
+            return;
         }
     }
 
@@ -451,350 +420,184 @@ unlock_session(BiometricSession *session)
 
             if (retry_error) {
                 g_warning("Retrying DBus call failed: %s", retry_error->message);
-                return 1;
+                return;
             }
-        } else {
-            return 1;
         }
     }
-
-    return 0;
-}
-
-static gboolean
-biomd_stop_identify(BiometricSession *session)
-{
-    g_autoptr(GError) error = NULL;
-    g_autoptr(GVariant) result = NULL;
-    gboolean success = FALSE;
-
-    if (!is_fingerprint_hardware_available(session)) {
-        g_debug("Fingerprint hardware not available, no need to stop identification");
-        return FALSE;
-    }
-
-    g_debug("Stopping identification process...");
-
-    if (session->biomd_proxy == NULL) {
-        g_autoptr(GError) proxy_error = NULL;
-
-        g_debug("Biomd proxy is null, recreating dbus proxy");
-
-        session->biomd_proxy = g_dbus_proxy_new_for_bus_sync(
-            G_BUS_TYPE_SYSTEM,
-            G_DBUS_PROXY_FLAGS_NONE,
-            NULL,
-            "io.FuriOS.Biomd",
-            "/io/FuriOS/Biomd/Fingerprint",
-            "io.FuriOS.Biomd.Fingerprint",
-            NULL,
-            &proxy_error
-        );
-
-        if (proxy_error) {
-            g_warning("Failed to create biomd proxy: %s", proxy_error->message);
-            return FALSE;
-        }
-    }
-
-    result = g_dbus_proxy_call_sync(
-        session->biomd_proxy,
-        "StopIdentify",
-        NULL,
-        G_DBUS_CALL_FLAGS_NONE,
-        -1,
-        NULL,
-        &error
-    );
-
-    if (error) {
-        g_warning("StopIdentify method failed: %s", error->message);
-        return FALSE;
-    }
-
-    g_variant_get(result, "(b)", &success);
-
-    if (success) {
-        g_debug("Successfully stopped identify operation");
-        session->in_progress = FALSE;
-    }
-
-    return success;
-}
-
-static gchar **
-get_enrolled_fingers(BiometricSession *session, gsize *num_fingers)
-{
-    g_autoptr(GError) error = NULL;
-    g_autoptr(GVariant) result = NULL;
-    g_autoptr(GVariant) enrolled_fingers_variant = NULL;
-    gchar **fingers = NULL;
-
-    if (session->biomd_proxy == NULL) {
-        g_autoptr(GError) proxy_error = NULL;
-
-        g_debug("Biomd proxy is null, recreating dbus proxy");
-
-        session->biomd_proxy = g_dbus_proxy_new_for_bus_sync(
-            G_BUS_TYPE_SYSTEM,
-            G_DBUS_PROXY_FLAGS_NONE,
-            NULL,
-            "io.FuriOS.Biomd",
-            "/io/FuriOS/Biomd/Fingerprint",
-            "io.FuriOS.Biomd.Fingerprint",
-            NULL,
-            &proxy_error
-        );
-
-        if (proxy_error) {
-            g_warning("Failed to create biomd proxy: %s", proxy_error->message);
-            *num_fingers = 0;
-            return NULL;
-        }
-    }
-
-    result = g_dbus_proxy_call_sync(
-        session->biomd_proxy,
-        "org.freedesktop.DBus.Properties.Get",
-        g_variant_new("(ss)", "io.FuriOS.Biomd.Fingerprint", "EnrolledFingers"),
-        G_DBUS_CALL_FLAGS_NONE,
-        -1,
-        NULL,
-        &error
-    );
-
-    if (error) {
-        g_warning("Failed to get EnrolledFingers property: %s", error->message);
-        *num_fingers = 0;
-        return NULL;
-    }
-
-    g_variant_get(result, "(v)", &enrolled_fingers_variant);
-    fingers = g_variant_dup_strv(enrolled_fingers_variant, num_fingers);
-
-    return fingers;
-}
-
-static gboolean
-has_enrolled_fingers(BiometricSession *session)
-{
-    gsize num_fingers = 0;
-    gchar **fingers = get_enrolled_fingers(session, &num_fingers);
-    gboolean has_fingers = (fingers != NULL && num_fingers > 0);
-
-    g_strfreev(fingers);
-    return has_fingers;
-}
-
-static gboolean
-biomd_identify(BiometricSession *session)
-{
-    g_autoptr(GError) error = NULL;
-    g_autoptr(GVariant) result = NULL;
-    gboolean success = FALSE;
-
-    g_debug("Starting finger identification...");
-
-    if (session->biomd_proxy == NULL) {
-        g_autoptr(GError) proxy_error = NULL;
-
-        g_debug("Biomd proxy is null, recreating dbus proxy");
-
-        session->biomd_proxy = g_dbus_proxy_new_for_bus_sync(
-            G_BUS_TYPE_SYSTEM,
-            G_DBUS_PROXY_FLAGS_NONE,
-            NULL,
-            "io.FuriOS.Biomd",
-            "/io/FuriOS/Biomd/Fingerprint",
-            "io.FuriOS.Biomd.Fingerprint",
-            NULL,
-            &proxy_error
-        );
-
-        if (proxy_error) {
-            g_warning("Failed to create biomd proxy: %s", proxy_error->message);
-            session->in_progress = FALSE;
-            return FALSE;
-        }
-    }
-
-    /* Check if there are any enrolled fingers */
-    if (!has_enrolled_fingers(session)) {
-        g_debug("No fingerprints enrolled, skipping identification");
-        session->in_progress = FALSE;
-        return FALSE;
-    }
-
-    /* Proceed with identification */
-    result = g_dbus_proxy_call_sync(
-        session->biomd_proxy,
-        "Identify",
-        NULL,
-        G_DBUS_CALL_FLAGS_NONE,
-        -1,
-        NULL,
-        &error
-    );
-
-    if (error) {
-        g_warning("Identify method failed: %s", error->message);
-        session->in_progress = FALSE;
-        return FALSE;
-    }
-
-    g_variant_get(result, "(b)", &success);
-
-    if (!success) {
-        g_warning("Identify method reported failure");
-        session->in_progress = FALSE;
-    } else {
-        g_debug("Identify started successfully");
-    }
-
-    return success;
 }
 
 static void
-restart_identify(BiometricSession *session)
+stop_all_biometrics(BiometricSession *session)
 {
-    g_debug("Stopping current identification and starting a new one...");
+    if (!session)
+        return;
 
-    if (!has_enrolled_fingers(session)) {
-        g_debug("No fingerprints enrolled, skipping identification");
-        biomd_stop_identify(session);
-        session->in_progress = FALSE;
+    if (session->fingerprint)
+        session_fingerprint_stop(session->fingerprint);
+
+    if (session->face)
+        session_face_stop(session->face);
+
+    session->unlock_in_progress = FALSE;
+}
+
+static void
+maybe_unlock_now(BiometricSession *session)
+{
+    gboolean keyring_locked = FALSE;
+    gboolean screen_locked = FALSE;
+
+    if (!session)
+        return;
+
+    if (session->unlocked_this_attempt)
+        return;
+
+    keyring_locked = is_keyring_locked(session);
+    screen_locked = is_screen_locked(session);
+
+    if (screen_is_on(session) && screen_locked && !keyring_locked) {
+        session->unlocked_this_attempt = TRUE;
+        send_feedback("button-released");
+        unlock_session(session);
+        stop_all_biometrics(session);
+    }
+}
+
+static void
+on_fingerprint_success(gpointer user_data)
+{
+    BiometricSession *session = user_data;
+
+    if (!session)
+        return;
+
+    g_debug("Fingerprint success");
+    maybe_unlock_now(session);
+}
+
+static void
+on_fingerprint_error(gint error_code, gpointer user_data)
+{
+    BiometricSession *session = user_data;
+    gboolean screen_locked = FALSE;
+
+    if (!session)
+        return;
+
+    g_debug("Fingerprint error: %d", error_code);
+
+    screen_locked = is_screen_locked(session);
+
+    if (error_code == ERROR_FINGER_NOT_RECOGNIZED && screen_is_on(session) && screen_locked) {
+        send_feedback("window-close");
         return;
     }
 
-    if (biomd_stop_identify(session)) {
-        session->in_progress = TRUE;
-        biomd_identify(session);
-    } else {
-        g_warning("Failed to stop identification, not restarting");
+    if (error_code == ERROR_CANCELED && !screen_is_on(session)) {
+        g_debug("Fingerprint canceled and display off, stopping attempts.");
+        stop_all_biometrics(session);
+        return;
     }
 }
 
 static void
-on_biomd_signal(GDBusConnection *connection, const gchar *sender_name,
-                const gchar *object_path, const gchar *interface_name,
-                const gchar *signal_name, GVariant *parameters,
-                gpointer user_data)
+on_face_success(gpointer user_data)
 {
-    (void)connection;
-    (void)sender_name;
-    (void)object_path;
-    (void)interface_name;
+    BiometricSession *session = user_data;
 
-    BiometricSession *session = (BiometricSession *)user_data;
+    if (!session)
+        return;
 
-    if (g_strcmp0(signal_name, "Identified") == 0) {
-        g_autofree gchar *finger_name = NULL;
-        g_variant_get(parameters, "(s)", &finger_name);
-        g_debug("Identified finger: %s", finger_name);
-
-        gboolean keyring_locked = is_keyring_locked(session);
-        gboolean screen_locked = is_screen_locked(session);
-
-        if (screen_is_on(session) && screen_locked && !keyring_locked) {
-            send_feedback("button-released");
-            unlock_session(session);
-        } else {
-            if (keyring_locked)
-                g_debug("Keyring is still locked, discarding fingerprint request");
-            if (!screen_locked)
-                g_debug("Screen is unlocked, discarding fingerprint request");
-            if (!screen_is_on(session))
-                g_debug("Display is off, discarding fingerprint request");
-        }
-
-        session->in_progress = FALSE;
-    } else if (g_strcmp0(signal_name, "ErrorInfoChanged") == 0) {
-        gint error_code;
-        g_variant_get(parameters, "(i)", &error_code);
-
-        const gchar *error_info = "UNKNOWN_ERROR";
-        switch (error_code) {
-            case ERROR_NONE: error_info = "ERROR_NONE"; break;
-            case ERROR_HW_UNAVAILABLE: error_info = "ERROR_HW_UNAVAILABLE"; break;
-            case ERROR_UNABLE_TO_PROCESS: error_info = "ERROR_UNABLE_TO_PROCESS"; break;
-            case ERROR_TIMEOUT: error_info = "ERROR_TIMEOUT"; break;
-            case ERROR_NO_SPACE: error_info = "ERROR_NO_SPACE"; break;
-            case ERROR_CANCELED: error_info = "ERROR_CANCELED"; break;
-            case ERROR_REMOVE: error_info = "ERROR_REMOVE"; break;
-            case ERROR_LOCKOUT: error_info = "ERROR_LOCKOUT"; break;
-            case ERROR_GENERAL: error_info = "ERROR_GENERAL"; break;
-            case ERROR_FINGER_NOT_RECOGNIZED: error_info = "ERROR_FINGER_NOT_RECOGNIZED"; break;
-            default: error_info = "ERROR_UNKNOWN"; break;
-        }
-
-        g_debug("Error info: %s", error_info);
-        gboolean screen_locked = is_screen_locked(session);
-
-        if (error_code == ERROR_FINGER_NOT_RECOGNIZED && screen_is_on(session) && screen_locked) {
-            send_feedback("window-close");
-        } else if (error_code == ERROR_CANCELED && !screen_is_on(session)) {
-            g_debug("Operation canceled and display is off. Stopping attempts.");
-            session->in_progress = FALSE;
-            biomd_stop_identify(session);
-        } else if (error_code == ERROR_CANCELED && screen_is_on(session) && screen_locked) {
-            g_debug("Fingerprint timed out. Waiting for finger identification again...");
-            restart_identify(session);
-        } else {
-            if (!screen_locked)
-                g_debug("Operation canceled and display is unlocked. Stopping attempts.");
-            session->in_progress = FALSE;
-            biomd_stop_identify(session);
-        }
-    }
+    g_debug("Face success");
+    maybe_unlock_now(session);
 }
 
 static void
 start_unlock_attempt(BiometricSession *session)
 {
-    if (session->in_progress) {
-        g_debug("Unlock attempt already in progress, stopping and restarting...");
-        restart_identify(session);
+    gboolean fp_ok = FALSE;
+    gboolean face_ok = FALSE;
+
+    if (!session)
+        return;
+
+    if (session->unlock_in_progress) {
+        g_debug("Unlock attempt already in progress");
         return;
     }
 
-    if (!is_fingerprint_hardware_available(session)) {
-        g_debug("Fingerprint hardware not available, cannot make any unlock attempts");
-        return;
+    session->unlocked_this_attempt = FALSE;
+    session->unlock_in_progress = TRUE;
+
+    if (session->fingerprint) {
+        if (session_fingerprint_is_available(session->fingerprint) &&
+            session_fingerprint_has_enrolled(session->fingerprint)) {
+            fp_ok = session_fingerprint_start(session->fingerprint);
+        } else {
+            g_debug("Fingerprint not usable, ignoring for unlock attempt");
+        }
     }
 
-    if (!has_enrolled_fingers(session)) {
-        g_debug("No fingerprints enrolled, skipping identification");
-        biomd_stop_identify(session);
-        session->in_progress = FALSE;
-        return;
+    if (session->face) {
+        if (session_face_is_available(session->face) &&
+            session_face_is_enrolled(session->face)) {
+            face_ok = session_face_start(session->face);
+        } else {
+            g_debug("Face not usable, ignoring for unlock attempt");
+        }
     }
 
-    session->in_progress = TRUE;
-    biomd_identify(session);
+    if (!fp_ok && !face_ok) {
+        g_debug("No biometric module started");
+        session->unlock_in_progress = FALSE;
+        session->unlocked_this_attempt = FALSE;
+    }
 }
 
 static void
-on_properties_changed(GDBusConnection *connection, const gchar *sender_name,
-                      const gchar *object_path, const gchar *interface_name,
-                      const gchar *signal_name, GVariant *parameters,
+cleanup_signal_subscriptions(BiometricSession *session)
+{
+    if (!session)
+        return;
+
+    if (session->connection != NULL) {
+        if (session->properties_changed_id > 0) {
+            g_debug("Unsubscribing from PropertiesChanged signal (ID: %u)", session->properties_changed_id);
+            g_dbus_connection_signal_unsubscribe(session->connection, session->properties_changed_id);
+            session->properties_changed_id = 0;
+        }
+    }
+}
+
+static void
+on_properties_changed(GDBusConnection *connection,
+                      const gchar *sender_name,
+                      const gchar *object_path,
+                      const gchar *interface_name,
+                      const gchar *signal_name,
+                      GVariant *parameters,
                       gpointer user_data)
 {
+    BiometricSession *session = user_data;
+    const gchar *changed_interface = NULL;
+    GVariant *changed_properties = NULL;
+    g_autofree const gchar **invalidated_properties = NULL;
+    GVariantIter iter;
+    const gchar *key = NULL;
+    GVariant *value = NULL;
+    g_autofree gchar *new_session_id = NULL;
+    gboolean active = FALSE;
+    gboolean idle_hint = FALSE;
+
     (void)connection;
     (void)sender_name;
     (void)object_path;
     (void)interface_name;
     (void)signal_name;
 
-    BiometricSession *session = (BiometricSession *)user_data;
-    const gchar *changed_interface;
-    GVariant *changed_properties;
-    g_autofree const gchar **invalidated_properties = NULL;
-    GVariantIter iter;
-    const gchar *key;
-    GVariant *value;
-    g_autofree gchar *new_session_id = NULL;
-    gboolean active;
-    gboolean idle_hint;
+    if (!session)
+        return;
 
     g_variant_get(parameters, "(&s@a{sv}^a&s)",
                   &changed_interface,
@@ -810,6 +613,7 @@ on_properties_changed(GDBusConnection *connection, const gchar *sender_name,
 
                 if (!active) {
                     g_debug("Session became inactive, searching for new active session...");
+                    stop_all_biometrics(session);
                     sleep(10);
 
                     do {
@@ -842,9 +646,9 @@ on_properties_changed(GDBusConnection *connection, const gchar *sender_name,
 
                 if (idle_hint) {
                     g_debug("Device became idle, stopping any ongoing identification");
-                    biomd_stop_identify(session);
+                    stop_all_biometrics(session);
                 } else {
-                    g_debug("Screen is on, starting unlock attempt");
+                    g_debug("Device active, starting unlock attempt");
                     start_unlock_attempt(session);
                 }
             }
@@ -857,40 +661,18 @@ on_properties_changed(GDBusConnection *connection, const gchar *sender_name,
 }
 
 static void
-cleanup_signal_subscriptions(BiometricSession *session)
-{
-    if (session->connection != NULL) {
-        if (session->properties_changed_id > 0) {
-            g_debug("Unsubscribing from PropertiesChanged signal (ID: %u)", session->properties_changed_id);
-            g_dbus_connection_signal_unsubscribe(session->connection, session->properties_changed_id);
-            session->properties_changed_id = 0;
-        }
-
-        if (session->identified_signal_id > 0) {
-            g_debug("Unsubscribing from Identified signal (ID: %u)", session->identified_signal_id);
-            g_dbus_connection_signal_unsubscribe(session->connection, session->identified_signal_id);
-            session->identified_signal_id = 0;
-        }
-
-        if (session->error_info_changed_id > 0) {
-            g_debug("Unsubscribing from ErrorInfoChanged signal (ID: %u)", session->error_info_changed_id);
-            g_dbus_connection_signal_unsubscribe(session->connection, session->error_info_changed_id);
-            session->error_info_changed_id = 0;
-        }
-    }
-}
-
-static void
 setup_dbus_connection(BiometricSession *session)
 {
     g_autofree gchar *session_path = NULL;
     g_autofree gchar *subscription_path = NULL;
     g_autoptr(GError) error = NULL;
 
+    if (!session)
+        return;
+
     cleanup_signal_subscriptions(session);
 
     session_path = g_strdup_printf("/org/freedesktop/login1/session/%s", session->session_id);
-
     g_debug("Setting up D-Bus connection for session path: %s", session_path);
 
     if (session->session_proxy != NULL) {
@@ -912,6 +694,11 @@ setup_dbus_connection(BiometricSession *session)
     if (error) {
         g_warning("Failed to create session proxy: %s", error->message);
         return;
+    }
+
+    if (session->secrets_proxy != NULL) {
+        g_object_unref(session->secrets_proxy);
+        session->secrets_proxy = NULL;
     }
 
     session->secrets_proxy = g_dbus_proxy_new_for_bus_sync(
@@ -938,25 +725,21 @@ setup_dbus_connection(BiometricSession *session)
         }
     }
 
-    if (session->biomd_proxy != NULL) {
-        g_object_unref(session->biomd_proxy);
-        session->biomd_proxy = NULL;
+    if (session->fingerprint == NULL) {
+        session->fingerprint = session_fingerprint_new(session->connection,
+                                                       on_fingerprint_success,
+                                                       on_fingerprint_error,
+                                                       session);
+        if (session->fingerprint == NULL)
+            g_warning("Failed to create fingerprint helper");
     }
 
-    session->biomd_proxy = g_dbus_proxy_new_for_bus_sync(
-        G_BUS_TYPE_SYSTEM,
-        G_DBUS_PROXY_FLAGS_NONE,
-        NULL,
-        "io.FuriOS.Biomd",
-        "/io/FuriOS/Biomd/Fingerprint",
-        "io.FuriOS.Biomd.Fingerprint",
-        NULL,
-        &error
-    );
-
-    if (error) {
-        g_warning("Failed to create biomd proxy: %s", error->message);
-        error = NULL;
+    if (session->face == NULL) {
+        session->face = session_face_new(session->connection,
+                                         on_face_success,
+                                         session);
+        if (session->face == NULL)
+            g_warning("Failed to create face helper");
     }
 
     subscription_path = g_strdup_printf("/org/freedesktop/login1/session/%s", session->session_id);
@@ -975,53 +758,21 @@ setup_dbus_connection(BiometricSession *session)
     );
 
     g_debug("Subscribed to PropertiesChanged signal for session (ID: %u)", session->properties_changed_id);
-
-    if (is_fingerprint_hardware_available(session)) {
-        session->identified_signal_id = g_dbus_connection_signal_subscribe(
-            session->connection,
-            "io.FuriOS.Biomd",
-            "io.FuriOS.Biomd.Fingerprint",
-            "Identified",
-            "/io/FuriOS/Biomd/Fingerprint",
-            NULL,
-            G_DBUS_SIGNAL_FLAGS_NONE,
-            on_biomd_signal,
-            session,
-            NULL
-        );
-
-        session->error_info_changed_id = g_dbus_connection_signal_subscribe(
-            session->connection,
-            "io.FuriOS.Biomd",
-            "io.FuriOS.Biomd.Fingerprint",
-            "ErrorInfoChanged",
-            "/io/FuriOS/Biomd/Fingerprint",
-            NULL,
-            G_DBUS_SIGNAL_FLAGS_NONE,
-            on_biomd_signal,
-            session,
-            NULL
-        );
-    } else {
-        g_debug("Fingerprint hardware not available, not subscribing to biomd fingerprint signals");
-        session->identified_signal_id = 0;
-        session->error_info_changed_id = 0;
-    }
-
     g_debug("Connected to session %s for property changes", session->session_id);
 }
 
 int
 main(void)
 {
-    g_log_set_handler(NULL, G_LOG_LEVEL_MASK, g_log_default_handler, NULL);
+    GMainLoop *loop = NULL;
+    BiometricSession *session = NULL;
 
-    BiometricSession *session = g_new0(BiometricSession, 1);
-    session->in_progress = FALSE;
+    session = g_new0(BiometricSession, 1);
+
+    session->unlock_in_progress = FALSE;
+    session->unlocked_this_attempt = FALSE;
 
     session->properties_changed_id = 0;
-    session->identified_signal_id = 0;
-    session->error_info_changed_id = 0;
 
     session->logind = logind_monitor_new(NULL, NULL);
 
@@ -1031,19 +782,30 @@ main(void)
 
     g_debug("Initial listener setup complete for session: %s", session->session_id);
 
-    GMainLoop *loop = g_main_loop_new(NULL, FALSE);
+    loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(loop);
 
     g_main_loop_unref(loop);
 
+    stop_all_biometrics(session);
+
+    if (session->fingerprint)
+        session_fingerprint_free(session->fingerprint);
+
+    if (session->face)
+        session_face_free(session->face);
+
     if (session->login1_manager_proxy)
         g_object_unref(session->login1_manager_proxy);
+
     if (session->session_proxy)
         g_object_unref(session->session_proxy);
+
     if (session->secrets_proxy)
         g_object_unref(session->secrets_proxy);
-    if (session->biomd_proxy)
-        g_object_unref(session->biomd_proxy);
+
+    if (session->connection)
+        g_object_unref(session->connection);
 
     if (session->logind)
         logind_monitor_free(session->logind);
