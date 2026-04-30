@@ -22,6 +22,7 @@
 #define FACE_AGENT_IFACE "io.FuriOS.Biomd.Face.Agent"
 
 #define SUBMIT_INTERVAL_MS 200 /* 5 fps */
+#define RETRY_REGISTER_INTERVAL_MS 2000
 
 typedef struct {
     GDBusConnection *bus;
@@ -39,12 +40,15 @@ struct _SessionFace {
     gboolean face_enrolled;
     gboolean has_access;
     gboolean recognition_started;
+    gboolean recognition_registered;
     gboolean in_progress;
 
     gboolean want_start;
+    gboolean lock_relevant;
 
     guint sig_agent_id;
     guint sig_manager_id;
+    guint retry_register_id;
 
     GstElement *pipeline;
     GstElement *appsink;
@@ -54,6 +58,18 @@ struct _SessionFace {
     SessionFaceSuccessCb success_cb;
     gpointer user_data;
 };
+
+static gboolean
+try_start_if_ready(SessionFace *face);
+
+static void
+on_agent_signal(GDBusConnection *c,
+                const gchar *sender_name,
+                const gchar *object_path,
+                const gchar *interface_name,
+                const gchar *signal_name,
+                GVariant *parameters,
+                gpointer user_data);
 
 static const char *
 recognition_state_to_string(guint32 state_u32)
@@ -539,7 +555,162 @@ register_recognition(SessionFace *face)
     }
 
     g_variant_get(ret, "(b)", &ok);
+    face->recognition_registered = ok;
     return ok;
+}
+
+static void
+unregister_recognition(SessionFace *face)
+{
+    if (!face || !face->bus)
+        return;
+
+    if (!face->recognition_registered)
+        return;
+
+    g_dbus_connection_call(
+        face->bus,
+        BIOMD_SERVICE,
+        FACE_PATH,
+        FACE_IFACE,
+        "UnregisterRecognitionAgent",
+        NULL,
+        NULL,
+        G_DBUS_CALL_FLAGS_NONE,
+        -1,
+        NULL,
+        NULL,
+        NULL
+    );
+
+    face->recognition_registered = FALSE;
+}
+
+static void
+destroy_agent(SessionFace *face)
+{
+    if (!face || !face->bus || !face->agent_path)
+        return;
+
+    g_dbus_connection_call(
+        face->bus,
+        BIOMD_SERVICE,
+        FACE_PATH,
+        FACE_IFACE,
+        "DestroyAgent",
+        g_variant_new("(o)", face->agent_path),
+        NULL,
+        G_DBUS_CALL_FLAGS_NONE,
+        -1,
+        NULL,
+        NULL,
+        NULL
+    );
+
+    g_clear_pointer(&face->agent_path, g_free);
+    face->has_access = FALSE;
+}
+
+static gboolean
+retry_register_cb(gpointer user_data)
+{
+    SessionFace *face = user_data;
+
+    if (!face)
+        return G_SOURCE_REMOVE;
+
+    if (!face->lock_relevant) {
+        face->retry_register_id = 0;
+        return G_SOURCE_REMOVE;
+    }
+
+    if (!face->agent_path && !create_agent(face))
+        return G_SOURCE_CONTINUE;
+
+    if (register_recognition(face)) {
+        g_debug("Face: recognition agent reacquired");
+
+        face->has_access = agent_get_prop_bool(face, "HasAccess");
+
+        if (face->want_start)
+            try_start_if_ready(face);
+
+        face->retry_register_id = 0;
+        return G_SOURCE_REMOVE;
+    }
+
+    return G_SOURCE_CONTINUE;
+}
+
+static void
+schedule_register_retry(SessionFace *face)
+{
+    if (!face)
+        return;
+
+    if (!face->lock_relevant)
+        return;
+
+    if (face->retry_register_id != 0)
+        return;
+
+    face->retry_register_id = g_timeout_add(RETRY_REGISTER_INTERVAL_MS,
+                                            retry_register_cb,
+                                            face);
+}
+
+static void
+cancel_register_retry(SessionFace *face)
+{
+    if (!face)
+        return;
+
+    if (face->retry_register_id == 0)
+        return;
+
+    g_source_remove(face->retry_register_id);
+    face->retry_register_id = 0;
+}
+
+static gboolean
+ensure_registered(SessionFace *face)
+{
+    if (!face)
+        return FALSE;
+
+    if (!face->lock_relevant)
+        return FALSE;
+
+    if (!face->agent_path && !create_agent(face))
+        return FALSE;
+
+    if (face->sig_agent_id == 0) {
+        face->sig_agent_id = g_dbus_connection_signal_subscribe(
+            face->bus,
+            BIOMD_SERVICE,
+            FACE_AGENT_IFACE,
+            NULL,
+            face->agent_path,
+            NULL,
+            G_DBUS_SIGNAL_FLAGS_NONE,
+            on_agent_signal,
+            face,
+            NULL
+        );
+    }
+
+    if (face->recognition_registered)
+        return TRUE;
+
+    if (register_recognition(face)) {
+        face->recognition_registered = TRUE;
+        face->has_access = agent_get_prop_bool(face, "HasAccess");
+        cancel_register_retry(face);
+        return TRUE;
+    }
+
+    schedule_register_retry(face);
+    return FALSE;
 }
 
 static void
@@ -562,6 +733,34 @@ agent_cancel(SessionFace *face)
         NULL,
         NULL
     );
+}
+
+static void
+release_registered_agent(SessionFace *face)
+{
+    if (!face)
+        return;
+
+    cancel_register_retry(face);
+
+    stop_pipeline(face);
+
+    if (face->has_access && (face->recognition_started || face->in_progress))
+        agent_cancel(face);
+
+    face->in_progress = FALSE;
+    face->recognition_started = FALSE;
+    face->last_submit_us = 0;
+    face->want_start = FALSE;
+
+    unregister_recognition(face);
+
+    if (face->bus && face->sig_agent_id) {
+        g_dbus_connection_signal_unsubscribe(face->bus, face->sig_agent_id);
+        face->sig_agent_id = 0;
+    }
+
+    destroy_agent(face);
 }
 
 static gboolean
@@ -614,6 +813,12 @@ try_start_if_ready(SessionFace *face)
         return FALSE;
 
     if (!session_face_is_enrolled(face))
+        return FALSE;
+
+    if (!face->lock_relevant)
+        return FALSE;
+
+    if (!ensure_registered(face))
         return FALSE;
 
     if (!face->has_access)
@@ -700,6 +905,7 @@ on_agent_signal(GDBusConnection *c,
 
         if (face->has_access) {
             g_debug("Face access granted");
+            cancel_register_retry(face);
             if (face->want_start)
                 try_start_if_ready(face);
         } else {
@@ -708,6 +914,9 @@ on_agent_signal(GDBusConnection *c,
             face->in_progress = FALSE;
             face->recognition_started = FALSE;
             face->last_submit_us = 0;
+
+            if (face->lock_relevant)
+                schedule_register_retry(face);
         }
 
         return;
@@ -760,6 +969,7 @@ session_face_new(GDBusConnection *system_bus,
 
     face->sig_agent_id = 0;
     face->sig_manager_id = 0;
+    face->retry_register_id = 0;
 
     face->available_checked = FALSE;
     face->available_cached = FALSE;
@@ -772,8 +982,10 @@ session_face_new(GDBusConnection *system_bus,
     face->face_enrolled = FALSE;
     face->has_access = FALSE;
     face->recognition_started = FALSE;
+    face->recognition_registered = FALSE;
     face->in_progress = FALSE;
     face->want_start = FALSE;
+    face->lock_relevant = FALSE;
 
     face->sig_manager_id = g_dbus_connection_signal_subscribe(
         face->bus,
@@ -790,28 +1002,6 @@ session_face_new(GDBusConnection *system_bus,
 
     face->face_enrolled = session_face_is_enrolled(face);
 
-    if (create_agent(face)) {
-        face->sig_agent_id = g_dbus_connection_signal_subscribe(
-            face->bus,
-            BIOMD_SERVICE,
-            FACE_AGENT_IFACE,
-            NULL,
-            face->agent_path,
-            NULL,
-            G_DBUS_SIGNAL_FLAGS_NONE,
-            on_agent_signal,
-            face,
-            NULL
-        );
-
-        if (!register_recognition(face))
-            g_debug("Face: failed to register recognition agent at init");
-    } else {
-        g_debug("Face: failed to create agent at init");
-    }
-
-    face->has_access = agent_get_prop_bool(face, "HasAccess");
-
     return face;
 }
 
@@ -821,7 +1011,7 @@ session_face_free(SessionFace *face)
     if (!face)
         return;
 
-    session_face_stop(face);
+    release_registered_agent(face);
 
     if (face->bus) {
         if (face->sig_agent_id) {
@@ -886,10 +1076,13 @@ session_face_start(SessionFace *face)
 
     face->want_start = TRUE;
 
+    ensure_registered(face);
+
     face->has_access = agent_get_prop_bool(face, "HasAccess");
 
     if (!face->has_access) {
         g_debug("Face: no access yet");
+        schedule_register_retry(face);
         return FALSE;
     }
 
@@ -912,4 +1105,25 @@ session_face_stop(SessionFace *face)
     face->last_submit_us = 0;
 
     face->want_start = FALSE;
+}
+
+void
+session_face_set_lock_relevant(SessionFace *face,
+                               gboolean lock_relevant)
+{
+    if (!face)
+        return;
+
+    if (face->lock_relevant == lock_relevant)
+        return;
+
+    face->lock_relevant = lock_relevant;
+
+    if (lock_relevant) {
+        g_debug("Face: lock relevant, acquiring recognition agent");
+        ensure_registered(face);
+    } else {
+        g_debug("Face: screen on and unlocked, releasing recognition agent");
+        release_registered_agent(face);
+    }
 }

@@ -63,4 +63,13 @@ session_face_start(SessionFace *face);
 void
 session_face_stop(SessionFace *face);
 
+/**
+ * Set whether the face helper should hold/retry the recognition agent.
+ * @param face Face helper
+ * @param lock_relevant TRUE when screen is off or locked, FALSE when screen is on and unlocked
+ */
+void
+session_face_set_lock_relevant(SessionFace *face,
+                               gboolean lock_relevant);
+
 #endif /* SESSION_FACE_H */

@@ -426,6 +426,25 @@ unlock_session(BiometricSession *session)
     }
 }
 
+static gboolean
+face_agent_should_be_held(BiometricSession *session)
+{
+    if (!session)
+        return FALSE;
+
+    return !screen_is_on(session) || is_screen_locked(session);
+}
+
+static void
+update_face_agent_policy(BiometricSession *session)
+{
+    if (!session || !session->face)
+        return;
+
+    session_face_set_lock_relevant(session->face,
+                                   face_agent_should_be_held(session));
+}
+
 static void
 stop_all_biometrics(BiometricSession *session)
 {
@@ -461,6 +480,7 @@ maybe_unlock_now(BiometricSession *session)
         send_feedback("button-released");
         unlock_session(session);
         stop_all_biometrics(session);
+        update_face_agent_policy(session);
     }
 }
 
@@ -529,6 +549,8 @@ start_unlock_attempt(BiometricSession *session)
 
     session->unlocked_this_attempt = FALSE;
     session->unlock_in_progress = TRUE;
+
+    update_face_agent_policy(session);
 
     if (session->fingerprint) {
         if (session_fingerprint_is_available(session->fingerprint) &&
@@ -611,6 +633,8 @@ on_properties_changed(GDBusConnection *connection,
                 active = g_variant_get_boolean(value);
                 g_debug("Active state changed: %d", active);
 
+                update_face_agent_policy(session);
+
                 if (!active) {
                     g_debug("Session became inactive, searching for new active session...");
                     stop_all_biometrics(session);
@@ -638,11 +662,14 @@ on_properties_changed(GDBusConnection *connection,
                         }
 
                         setup_dbus_connection(session);
+                        update_face_agent_policy(session);
                     }
                 }
             } else if (g_strcmp0(key, "IdleHint") == 0) {
                 idle_hint = g_variant_get_boolean(value);
                 g_debug("IdleHint changed: %d", idle_hint);
+
+                update_face_agent_policy(session);
 
                 if (idle_hint) {
                     g_debug("Device became idle, stopping any ongoing identification");
@@ -651,6 +678,8 @@ on_properties_changed(GDBusConnection *connection,
                     g_debug("Device active, starting unlock attempt");
                     start_unlock_attempt(session);
                 }
+
+                update_face_agent_policy(session);
             }
 
             g_variant_unref(value);
@@ -740,6 +769,8 @@ setup_dbus_connection(BiometricSession *session)
                                          session);
         if (session->face == NULL)
             g_warning("Failed to create face helper");
+
+        update_face_agent_policy(session);
     }
 
     subscription_path = g_strdup_printf("/org/freedesktop/login1/session/%s", session->session_id);
@@ -759,6 +790,8 @@ setup_dbus_connection(BiometricSession *session)
 
     g_debug("Subscribed to PropertiesChanged signal for session (ID: %u)", session->properties_changed_id);
     g_debug("Connected to session %s for property changes", session->session_id);
+
+    update_face_agent_policy(session);
 }
 
 int
