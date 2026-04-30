@@ -23,6 +23,7 @@ Depends: ${misc:Depends},
          ${python3:Depends},
          ${shlibs:Depends},
          python3-dbus,
+         libfart,
 Description: Biometric service provider
  Biomd provides biometric services such as Fingerprint
 
