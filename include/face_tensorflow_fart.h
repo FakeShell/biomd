@@ -1,6 +1,6 @@
 /**
  * SPDX-License-Identifier: GPL-2.0-only
- * Copyright (C) 2025 Bardia Moshiri
+ * Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
  */
 
 #ifndef FACE_TENSORFLOW_FART_H

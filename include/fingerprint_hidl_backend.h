@@ -1,7 +1,7 @@
 /**
-* SPDX-License-Identifier: GPL-2.0-only
-* Copyright (C) 2025 Bardia Moshiri <bardia@furilabs.com>
-*/
+ * SPDX-License-Identifier: GPL-2.0-only
+ * Copyright (C) 2026 Bardia Moshiri <bardia@furilabs.com>
+ */
 
 #ifndef FINGERPRINT_HIDL_BACKEND_H
 #define FINGERPRINT_HIDL_BACKEND_H
