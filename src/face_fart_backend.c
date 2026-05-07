@@ -145,7 +145,8 @@ face_fart_backend_new(FaceBackendCallbacks callbacks)
     data->last_progress_emitted = -1;
 
     data->tf = face_tensorflow_fart_init("/usr/share/fart/models/detect-class1.tflite",
-                                         "/usr/share/fart/models/mobile_face_net.tflite");
+                                         "/usr/share/fart/models/mobile_face_net.tflite",
+                                         "/usr/share/fart/models/mini_fas_net_v2.tflite");
 
     if (!data->tf) {
         g_warning("Failed to initialize TensorFlow FART backend");

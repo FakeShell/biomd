@@ -25,11 +25,13 @@ typedef enum {
  *
  * @param detection_model   Path to detection TFLite model
  * @param recognition_model Path to recognition TFLite model
+ * @param anti_spoof_model  Optional path to anti-spoof TFLite model
  * @return New backend instance or NULL on failure
  */
 BiomFaceTensorflowFart *
 face_tensorflow_fart_init(const gchar *detection_model,
-                          const gchar *recognition_model);
+                          const gchar *recognition_model,
+                          const gchar *anti_spoof_model);
 
 /**
  * Destroy backend instance and free resources.

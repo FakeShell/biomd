@@ -36,6 +36,7 @@ typedef struct {
 struct _BiomFaceTensorflowFart {
     gchar *detection_model;
     gchar *recognition_model;
+    gchar *anti_spoof_model;
     gchar *data_dir;
     gchar *data_path;
     gchar *key_path;
@@ -742,7 +743,9 @@ drain_queue(BiomFaceTensorflowFart *self)
 }
 
 BiomFaceTensorflowFart *
-face_tensorflow_fart_init(const gchar *detection_model, const gchar *recognition_model)
+face_tensorflow_fart_init(const gchar *detection_model,
+                          const gchar *recognition_model,
+                          const gchar *anti_spoof_model)
 {
     BiomFaceTensorflowFart *self;
 
@@ -754,6 +757,7 @@ face_tensorflow_fart_init(const gchar *detection_model, const gchar *recognition
     self = g_new0(BiomFaceTensorflowFart, 1);
     self->detection_model = g_strdup(detection_model);
     self->recognition_model = g_strdup(recognition_model);
+    self->anti_spoof_model = g_strdup(anti_spoof_model);
     self->data_dir = g_strdup(BIOMD_FACE_DATA_DIR);
     self->data_path = g_build_filename(BIOMD_FACE_DATA_DIR, BIOMD_FACE_DATA_FILE, NULL);
     self->key_path = g_build_filename(BIOMD_FACE_DATA_DIR, BIOMD_FACE_KEY_FILE, NULL);
@@ -794,6 +798,7 @@ face_tensorflow_fart_init(const gchar *detection_model, const gchar *recognition
 
     self->fart_handle = fart_create(self->detection_model,
                                     self->recognition_model,
+                                    self->anti_spoof_model,
                                     NULL,
                                     enrollment_json);
 
@@ -817,8 +822,11 @@ face_tensorflow_fart_init(const gchar *detection_model, const gchar *recognition
         return NULL;
     }
 
-    g_debug("Initialized TensorFlow FART with models '%s' and '%s' using encrypted in-memory JSON store '%s'",
-            self->detection_model, self->recognition_model, self->data_path);
+    g_debug("Initialized TensorFlow FART with detection='%s' recognition='%s' anti_spoof='%s' data_path='%s'",
+            self->detection_model,
+            self->recognition_model,
+            self->anti_spoof_model ? self->anti_spoof_model : "(disabled)",
+            self->data_path);
 
     return self;
 }
@@ -863,6 +871,7 @@ face_tensorflow_fart_cleanup(BiomFaceTensorflowFart *self)
 
     g_free(self->detection_model);
     g_free(self->recognition_model);
+    g_free(self->anti_spoof_model);
     g_free(self->data_dir);
     g_free(self->data_path);
     g_free(self->key_path);
@@ -1065,6 +1074,7 @@ face_tensorflow_fart_remove_face_data(BiomFaceTensorflowFart *self)
 
     self->fart_handle = fart_create(self->detection_model,
                                     self->recognition_model,
+                                    self->anti_spoof_model,
                                     NULL,
                                     "");
 
