@@ -25,13 +25,13 @@ Depends: ${misc:Depends},
          python3-dbus,
          libfart,
 Description: Biometric service provider
- Biomd provides biometric services such as Fingerprint
+ Biomd provides biometric services such as Fingerprint or Face
 
 Package: biomd-dev
 Architecture: any
 Depends: ${misc:Depends},
 Description: Biometric service provider
- Biomd provides biometric services such as Fingerprint - development package
+ Biomd provides biometric services such as Fingerprint or Face - development package
 
 Package: biomd-fprintd
 Architecture: any
@@ -39,11 +39,11 @@ Depends: ${misc:Depends},
          ${shlibs:Depends},
          fprintd,
 Description: Biometric service provider
- Biomd provides biometric services such as Fingerprint - Fprintd provider
+ Biomd provides biometric services such as Fingerprint or Face - Fprintd provider
 
 Package: libpam-biomd
 Architecture: any
 Depends: ${misc:Depends},
          ${shlibs:Depends},
 Description: Biometric service provider
- Biomd provides biometric services such as Fingerprint - PAM module
+ Biomd provides biometric services such as Fingerprint or Face - Fingerprint PAM module
