@@ -71,6 +71,59 @@ on_agent_signal(GDBusConnection *c,
                 GVariant *parameters,
                 gpointer user_data);
 
+static void
+stop_pipeline(SessionFace *face);
+
+static void
+schedule_register_retry(SessionFace *face);
+
+static gboolean
+dbus_error_is_stale_biomd_or_agent(GError *error)
+{
+    g_autofree gchar *remote_error = NULL;
+
+    if (!error)
+        return FALSE;
+
+    remote_error = g_dbus_error_get_remote_error(error);
+
+    if (g_strcmp0(remote_error, "org.freedesktop.DBus.Error.ServiceUnknown") == 0 ||
+        g_strcmp0(remote_error, "org.freedesktop.DBus.Error.UnknownMethod") == 0 ||
+        g_strcmp0(remote_error, "org.freedesktop.DBus.Error.InvalidArgs") == 0 ||
+        g_strcmp0(remote_error, "org.freedesktop.DBus.Error.UnknownObject") == 0)
+        return TRUE;
+
+    if (strstr(error->message, "ServiceUnknown") ||
+        strstr(error->message, "Object does not exist") ||
+        strstr(error->message, "Unknown agent path") ||
+        strstr(error->message, "UnknownMethod"))
+        return TRUE;
+
+    return FALSE;
+}
+
+static void
+invalidate_agent(SessionFace *face)
+{
+    if (!face)
+        return;
+
+    stop_pipeline(face);
+
+    face->has_access = FALSE;
+    face->recognition_started = FALSE;
+    face->recognition_registered = FALSE;
+    face->in_progress = FALSE;
+    face->last_submit_us = 0;
+
+    if (face->bus && face->sig_agent_id) {
+        g_dbus_connection_signal_unsubscribe(face->bus, face->sig_agent_id);
+        face->sig_agent_id = 0;
+    }
+
+    g_clear_pointer(&face->agent_path, g_free);
+}
+
 static const char *
 recognition_state_to_string(guint32 state_u32)
 {
@@ -132,6 +185,12 @@ face_get_prop_bool(SessionFace *face, const gchar *prop)
 
     if (error) {
         g_debug("Face Get(%s) failed: %s", prop, error->message);
+
+        if (dbus_error_is_stale_biomd_or_agent(error)) {
+            face->available_checked = FALSE;
+            face->available_cached = FALSE;
+        }
+
         return FALSE;
     }
 
@@ -169,6 +228,12 @@ face_get_prop_int(SessionFace *face, const gchar *prop)
 
     if (error) {
         g_debug("Face Get(%s) failed: %s", prop, error->message);
+
+        if (dbus_error_is_stale_biomd_or_agent(error)) {
+            face->available_checked = FALSE;
+            face->available_cached = FALSE;
+        }
+
         return TYPE_UNKNOWN;
     }
 
@@ -209,6 +274,15 @@ agent_get_prop_bool(SessionFace *face, const gchar *prop)
 
     if (error) {
         g_debug("Face Agent Get(%s) failed: %s", prop, error->message);
+
+        if (dbus_error_is_stale_biomd_or_agent(error)) {
+            g_debug("Face: invalidating stale recognition agent");
+            invalidate_agent(face);
+
+            if (face->lock_relevant)
+                schedule_register_retry(face);
+        }
+
         return FALSE;
     }
 
@@ -517,11 +591,19 @@ create_agent(SessionFace *face)
 
     if (error) {
         g_debug("Face CreateAgent failed: %s", error->message);
+
+        if (dbus_error_is_stale_biomd_or_agent(error)) {
+            face->available_checked = FALSE;
+            face->available_cached = FALSE;
+        }
+
         return FALSE;
     }
 
     g_variant_get(ret, "(&o)", &tmp_path);
     face->agent_path = g_strdup(tmp_path);
+
+    g_debug("Face: created recognition agent at %s", face->agent_path);
     return TRUE;
 }
 
@@ -551,6 +633,12 @@ register_recognition(SessionFace *face)
 
     if (error) {
         g_debug("Face RegisterRecognitionAgent failed: %s", error->message);
+
+        if (dbus_error_is_stale_biomd_or_agent(error)) {
+            g_debug("Face: stale recognition agent path, forcing agent refresh");
+            invalidate_agent(face);
+        }
+
         return FALSE;
     }
 
@@ -626,6 +714,21 @@ retry_register_cb(gpointer user_data)
 
     if (!face->agent_path && !create_agent(face))
         return G_SOURCE_CONTINUE;
+
+    if (face->agent_path && face->sig_agent_id == 0) {
+        face->sig_agent_id = g_dbus_connection_signal_subscribe(
+            face->bus,
+            BIOMD_SERVICE,
+            FACE_AGENT_IFACE,
+            NULL,
+            face->agent_path,
+            NULL,
+            G_DBUS_SIGNAL_FLAGS_NONE,
+            on_agent_signal,
+            face,
+            NULL
+        );
+    }
 
     if (register_recognition(face)) {
         g_debug("Face: recognition agent reacquired");
@@ -789,6 +892,15 @@ agent_start_recognition(SessionFace *face)
 
     if (error) {
         g_debug("Face Agent StartRecognition failed: %s", error->message);
+
+        if (dbus_error_is_stale_biomd_or_agent(error)) {
+            g_debug("Face: StartRecognition hit stale agent, refreshing");
+            invalidate_agent(face);
+
+            if (face->lock_relevant)
+                schedule_register_retry(face);
+        }
+
         return FALSE;
     }
 
@@ -1037,14 +1149,15 @@ session_face_is_available(SessionFace *face)
     if (!face)
         return FALSE;
 
-    if (face->available_checked)
-        return face->available_cached;
+    if (face->available_checked && face->available_cached)
+        return TRUE;
 
     face->available_checked = TRUE;
     face->available_cached = FALSE;
 
     impl_type = face_get_prop_int(face, "ImplementationType");
     if (impl_type == TYPE_UNKNOWN) {
+        face->available_checked = FALSE;
         face->available_cached = FALSE;
         return FALSE;
     }
