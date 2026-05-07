@@ -3,11 +3,11 @@ Upstream-Name: biomd
 Source: https://github.com/furilabs/biomd
 
 Files: *
-Copyright: 2025 Bardia Moshiri <bardia@furilabs.com>
+Copyright: 2026 Bardia Moshiri <bardia@furilabs.com>
 License: GPL-2
 
 Files: debian/*
-Copyright: 2025 Bardia Moshiri <bardia@furilabs.com>
+Copyright: 2026 Bardia Moshiri <bardia@furilabs.com>
 License: BSD-3-clause
 
 License: GPL-2.0
