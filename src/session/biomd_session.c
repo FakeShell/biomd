@@ -8,6 +8,9 @@
 #include "session_face.h"
 #include "logind.h"
 
+#define PHOSH_LOCKSCREEN_SCHEMA "sm.puri.phosh.lockscreen"
+#define PHOSH_REQUIRE_UNLOCK_KEY "require-unlock"
+
 typedef struct {
     GDBusConnection *connection;
     GDBusProxy *login1_manager_proxy;
@@ -15,6 +18,10 @@ typedef struct {
     GDBusProxy *secrets_proxy;
 
     guint properties_changed_id;
+
+    GSettings *phosh_lockscreen_settings;
+    guint phosh_changed_id;
+    gboolean phosh_require_unlock;
 
     gchar *session_id;
 
@@ -35,6 +42,15 @@ screen_is_on(BiometricSession *session)
 {
     LogindScreenState s = logind_monitor_get_screen_state(session->logind);
     return (s != LOGIND_SCREEN_OFF);
+}
+
+static gboolean
+phosh_requires_unlock(BiometricSession *session)
+{
+    if (!session)
+        return TRUE;
+
+    return session->phosh_require_unlock;
 }
 
 static void
@@ -432,6 +448,9 @@ face_agent_should_be_held(BiometricSession *session)
     if (!session)
         return FALSE;
 
+    if (!phosh_requires_unlock(session))
+        return FALSE;
+
     return !screen_is_on(session) || is_screen_locked(session);
 }
 
@@ -468,6 +487,13 @@ maybe_unlock_now(BiometricSession *session)
 
     if (!session)
         return;
+
+    if (!phosh_requires_unlock(session)) {
+        g_debug("Phosh require-unlock is false, ignoring biometric unlock success");
+        stop_all_biometrics(session);
+        update_face_agent_policy(session);
+        return;
+    }
 
     if (session->unlocked_this_attempt)
         return;
@@ -507,6 +533,13 @@ on_fingerprint_error(gint error_code, gpointer user_data)
 
     g_debug("Fingerprint error: %d", error_code);
 
+    if (!phosh_requires_unlock(session)) {
+        g_debug("Phosh require-unlock is false, stopping fingerprint handling");
+        stop_all_biometrics(session);
+        update_face_agent_policy(session);
+        return;
+    }
+
     screen_locked = is_screen_locked(session);
 
     if (error_code == ERROR_FINGER_NOT_RECOGNIZED && screen_is_on(session) && screen_locked) {
@@ -542,6 +575,13 @@ start_unlock_attempt(BiometricSession *session)
     if (!session)
         return;
 
+    if (!phosh_requires_unlock(session)) {
+        g_debug("Phosh require-unlock is false, not starting biometric unlock attempt");
+        stop_all_biometrics(session);
+        update_face_agent_policy(session);
+        return;
+    }
+
     if (session->unlock_in_progress) {
         g_debug("Unlock attempt already in progress");
         return;
@@ -575,6 +615,78 @@ start_unlock_attempt(BiometricSession *session)
         session->unlock_in_progress = FALSE;
         session->unlocked_this_attempt = FALSE;
     }
+}
+
+static void
+on_phosh_changed(GSettings *settings,
+                 const gchar *key,
+                 gpointer user_data)
+{
+    BiometricSession *session = user_data;
+
+    if (!session || g_strcmp0(key, PHOSH_REQUIRE_UNLOCK_KEY) != 0)
+        return;
+
+    session->phosh_require_unlock = g_settings_get_boolean(settings,
+                                                           PHOSH_REQUIRE_UNLOCK_KEY);
+
+    g_debug("Phosh %s changed: %d", PHOSH_REQUIRE_UNLOCK_KEY, session->phosh_require_unlock);
+
+    update_face_agent_policy(session);
+
+    if (!session->phosh_require_unlock) {
+        g_debug("Phosh require-unlock disabled, canceling biometric actions");
+        stop_all_biometrics(session);
+        session->unlocked_this_attempt = FALSE;
+        update_face_agent_policy(session);
+    }
+}
+
+static void
+setup_phosh_settings(BiometricSession *session)
+{
+    GSettingsSchemaSource *source = NULL;
+    g_autoptr(GSettingsSchema) schema = NULL;
+
+    if (!session)
+        return;
+
+    source = g_settings_schema_source_get_default();
+    if (!source) {
+        g_debug("No default GSettings schema source available");
+        return;
+    }
+
+    schema = g_settings_schema_source_lookup(source,
+                                             PHOSH_LOCKSCREEN_SCHEMA,
+                                             TRUE);
+    if (!schema) {
+        g_debug("Phosh lockscreen schema %s not found", PHOSH_LOCKSCREEN_SCHEMA);
+        return;
+    }
+
+    if (!g_settings_schema_has_key(schema, PHOSH_REQUIRE_UNLOCK_KEY)) {
+        g_debug("Phosh key %s.%s not found",
+                PHOSH_LOCKSCREEN_SCHEMA,
+                PHOSH_REQUIRE_UNLOCK_KEY);
+        return;
+    }
+
+    session->phosh_lockscreen_settings = g_settings_new(PHOSH_LOCKSCREEN_SCHEMA);
+    session->phosh_require_unlock = g_settings_get_boolean(session->phosh_lockscreen_settings,
+                                                           PHOSH_REQUIRE_UNLOCK_KEY);
+
+    session->phosh_changed_id = g_signal_connect(
+        session->phosh_lockscreen_settings,
+        "changed::" PHOSH_REQUIRE_UNLOCK_KEY,
+        G_CALLBACK(on_phosh_changed),
+        session
+    );
+
+    g_debug("Watching Phosh setting %s.%s, current value: %d",
+            PHOSH_LOCKSCREEN_SCHEMA,
+            PHOSH_REQUIRE_UNLOCK_KEY,
+            session->phosh_require_unlock);
 }
 
 static void
@@ -675,8 +787,13 @@ on_properties_changed(GDBusConnection *connection,
                     g_debug("Device became idle, stopping any ongoing identification");
                     stop_all_biometrics(session);
                 } else {
-                    g_debug("Device active, starting unlock attempt");
-                    start_unlock_attempt(session);
+                    if (phosh_requires_unlock(session)) {
+                        g_debug("Device active, starting unlock attempt");
+                        start_unlock_attempt(session);
+                    } else {
+                        g_debug("Device active but Phosh require-unlock is false, skipping biometric unlock");
+                        stop_all_biometrics(session);
+                    }
                 }
 
                 update_face_agent_policy(session);
@@ -806,6 +923,10 @@ main(void)
     session->unlocked_this_attempt = FALSE;
 
     session->properties_changed_id = 0;
+    session->phosh_changed_id = 0;
+    session->phosh_require_unlock = TRUE;
+
+    setup_phosh_settings(session);
 
     session->logind = logind_monitor_new(NULL, NULL);
 
@@ -842,6 +963,14 @@ main(void)
 
     if (session->logind)
         logind_monitor_free(session->logind);
+
+    if (session->phosh_lockscreen_settings) {
+        if (session->phosh_changed_id > 0)
+            g_signal_handler_disconnect(session->phosh_lockscreen_settings,
+                                        session->phosh_changed_id);
+
+        g_object_unref(session->phosh_lockscreen_settings);
+    }
 
     g_free(session->session_id);
     g_free(session);
