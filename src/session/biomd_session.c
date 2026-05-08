@@ -723,6 +723,7 @@ on_properties_changed(GDBusConnection *connection,
     g_autofree gchar *new_session_id = NULL;
     gboolean active = FALSE;
     gboolean idle_hint = FALSE;
+    gboolean locked_hint = FALSE;
 
     (void)connection;
     (void)sender_name;
@@ -740,6 +741,7 @@ on_properties_changed(GDBusConnection *connection,
 
     if (g_strcmp0(changed_interface, "org.freedesktop.login1.Session") == 0) {
         g_variant_iter_init(&iter, changed_properties);
+
         while (g_variant_iter_next(&iter, "{&sv}", &key, &value)) {
             if (g_strcmp0(key, "Active") == 0) {
                 active = g_variant_get_boolean(value);
@@ -787,16 +789,36 @@ on_properties_changed(GDBusConnection *connection,
                     g_debug("Device became idle, stopping any ongoing identification");
                     stop_all_biometrics(session);
                 } else {
-                    if (phosh_requires_unlock(session)) {
-                        g_debug("Device active, starting unlock attempt");
+                    if (phosh_requires_unlock(session) && is_screen_locked(session)) {
+                        g_debug("Device active and locked, starting unlock attempt");
                         start_unlock_attempt(session);
                     } else {
-                        g_debug("Device active but Phosh require-unlock is false, skipping biometric unlock");
+                        g_debug("Device active but not locked or unlock not required, stopping biometrics");
                         stop_all_biometrics(session);
                     }
                 }
 
                 update_face_agent_policy(session);
+            } else if (g_strcmp0(key, "LockedHint") == 0) {
+                locked_hint = g_variant_get_boolean(value);
+                g_debug("LockedHint changed: %d", locked_hint);
+
+                update_face_agent_policy(session);
+
+                if (locked_hint) {
+                    if (phosh_requires_unlock(session) && screen_is_on(session)) {
+                        g_debug("Session locked, starting biometric unlock attempt");
+                        start_unlock_attempt(session);
+                    } else {
+                        g_debug("Session locked but screen is off or unlock not required, stopping biometrics");
+                        stop_all_biometrics(session);
+                    }
+                } else {
+                    g_debug("Session unlocked, stopping biometrics");
+                    stop_all_biometrics(session);
+                    session->unlocked_this_attempt = FALSE;
+                    update_face_agent_policy(session);
+                }
             }
 
             g_variant_unref(value);
